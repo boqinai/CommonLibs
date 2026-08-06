@@ -14,14 +14,19 @@ class ExampleApp extends StatelessWidget {
         child: Builder(
           builder: (context) => FilledButton(
             onPressed: () async {
-              final result = await AppUpdateService(
+              final updater = AppUpdateService(
                 updateApiUrl:
                     'https://api.boqinai.com/updatecenter/api/v1/update',
-              ).checkForUpdate();
-              if (context.mounted) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text(result.status.name)));
+              );
+              try {
+                final result = await updater.checkForUpdate();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(result.status.name)));
+                }
+              } finally {
+                updater.close();
               }
             },
             child: const Text('检查更新'),

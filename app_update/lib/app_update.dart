@@ -116,6 +116,7 @@ class AppUpdateService {
   Future<bool> downloadAndInstall(
     String downloadUrl, {
     required String version,
+    Duration downloadTimeout = const Duration(minutes: 30),
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
   }) async {
@@ -140,7 +141,8 @@ class AppUpdateService {
       if (downloadId == null || filePath == null) return false;
       onStarted?.call(downloadId);
 
-      while (true) {
+      final elapsed = Stopwatch()..start();
+      while (elapsed.elapsed < downloadTimeout) {
         await Future<void>.delayed(const Duration(milliseconds: 500));
         final progress = await _platform.invokeMapMethod<String, dynamic>(
           'getDownloadProgress',
@@ -160,6 +162,8 @@ class AppUpdateService {
         if (status == 16) return false;
         onProgress?.call(total > 0 ? downloaded / total : 0);
       }
+      await cancelDownload(downloadId);
+      return false;
     } catch (error) {
       debugPrint('下载或安装 APK 失败: $error');
       return false;
@@ -173,6 +177,8 @@ class AppUpdateService {
         }) ??
         false;
   }
+
+  void close() => _client.close();
 
   Future<UpdateRequestContext?> _loadContext() async {
     if (!_supportsAndroid) return null;

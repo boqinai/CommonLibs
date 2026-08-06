@@ -42,3 +42,7 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 ```
 
 接入现有项目时，删除原有 `app_update_service.dart` 及 `MainActivity` 中对应的更新 MethodChannel；各项目原有弹窗只需改为导入 `package:app_update/app_update.dart`。
+
+## 生命周期与安装权限
+
+`AppUpdateService` 持有 HTTP Client；不再使用时必须调用 `close()`（在 `StatefulWidget` 中放到 `dispose()`）。`downloadAndInstall` 默认最多等待 30 分钟，超时会取消 DownloadManager 任务，可通过 `downloadTimeout` 调整。Android 8.0+ 未授权安装未知应用时，插件会打开当前应用对应的系统设置页，用户授权后重试安装。

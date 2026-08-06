@@ -100,4 +100,62 @@ void main() {
       UpdateCheckStatus.failed,
     );
   });
+
+  test('close releases the HTTP client', () {
+    final client = _TrackingClient();
+    final service = AppUpdateService(
+      updateApiUrl: 'https://api.example.com/update',
+      client: client,
+    );
+
+    service.close();
+
+    expect(client.closed, isTrue);
+  });
+
+  test('download timeout cancels the DownloadManager task', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    var cancelled = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('app_update'), (
+          call,
+        ) async {
+          if (call.method == 'startDownload') {
+            return {'downloadId': 7, 'filePath': '/tmp/app.apk'};
+          }
+          if (call.method == 'cancelDownload') {
+            cancelled = true;
+            return true;
+          }
+          return {'status': 4, 'bytesDownloaded': 5, 'totalBytes': 10};
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('app_update'), null),
+    );
+
+    final installed =
+        await AppUpdateService(
+          updateApiUrl: 'https://api.example.com/update',
+        ).downloadAndInstall(
+          'https://example.com/app.apk',
+          version: '1.1.0',
+          downloadTimeout: Duration.zero,
+        );
+
+    expect(installed, isFalse);
+    expect(cancelled, isTrue);
+  });
+}
+
+class _TrackingClient extends http.BaseClient {
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async =>
+      http.StreamedResponse(const Stream<List<int>>.empty(), 200);
+
+  @override
+  void close() => closed = true;
 }

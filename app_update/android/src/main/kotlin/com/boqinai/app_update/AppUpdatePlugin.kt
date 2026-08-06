@@ -145,6 +145,23 @@ class AppUpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             return
         }
         try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            context.startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            result.error(
+                "install_permission_required",
+                "Allow this app to install unknown apps, then retry",
+                null,
+            )
+            return
+        }
+
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.app_update.fileprovider",
