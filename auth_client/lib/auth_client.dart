@@ -1,26 +1,57 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 class AuthException implements Exception {
-  const AuthException(this.message, {this.statusCode});
+  const AuthException(
+    this.message, {
+    this.statusCode,
+    this.isNetworkFailure = false,
+  });
 
   final String message;
   final int? statusCode;
+  final bool isNetworkFailure;
 
   @override
   String toString() => message;
 }
 
-class TokenStore {
+abstract interface class TokenStorage {
+  Future<String?> read();
+  Future<void> write(String token);
+  Future<void> clear();
+}
+
+class SecureTokenStore implements TokenStorage {
+  SecureTokenStore({this.name = 'auth_session', FlutterSecureStorage? storage})
+    : _storage = storage ?? const FlutterSecureStorage();
+
+  final String name;
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<String?> read() => _storage.read(key: name);
+
+  @override
+  Future<void> write(String token) => _storage.write(key: name, value: token);
+
+  @override
+  Future<void> clear() => _storage.delete(key: name);
+}
+
+class TokenStore implements TokenStorage {
   TokenStore({this.name = 'auth_session', Future<File> Function()? fileFactory})
     : _fileFactory = fileFactory;
 
   final String name;
   final Future<File> Function()? _fileFactory;
 
+  @override
   Future<String?> read() async {
     final file = await _file();
     if (!await file.exists()) return null;
@@ -28,12 +59,14 @@ class TokenStore {
     return token.isEmpty ? null : token;
   }
 
+  @override
   Future<void> write(String token) async {
     final file = await _file();
     await file.parent.create(recursive: true);
     await file.writeAsString(token, flush: true);
   }
 
+  @override
   Future<void> clear() async {
     final file = await _file();
     if (await file.exists()) await file.delete();
@@ -50,14 +83,14 @@ class AuthClient {
   AuthClient({
     required String baseUrl,
     http.Client? client,
-    TokenStore? tokenStore,
+    TokenStorage? tokenStore,
   }) : baseUrl = _normalizeBaseUrl(baseUrl),
        _client = client ?? http.Client(),
-       _tokenStore = tokenStore ?? TokenStore();
+       _tokenStore = tokenStore ?? SecureTokenStore();
 
   final String baseUrl;
   final http.Client _client;
-  final TokenStore _tokenStore;
+  final TokenStorage _tokenStore;
   String? _token;
 
   String? get token => _token;
@@ -96,6 +129,7 @@ class AuthClient {
       await currentUser();
       return _token;
     } on AuthException catch (error) {
+      if (error.isNetworkFailure) return _token;
       if (error.statusCode != 401) rethrow;
       await logout();
       return null;
@@ -162,7 +196,13 @@ class AuthClient {
     } on AuthException {
       rethrow;
     } catch (error) {
-      throw AuthException('认证请求失败: $error');
+      throw AuthException(
+        '认证请求失败: $error',
+        isNetworkFailure:
+            error is TimeoutException ||
+            error is SocketException ||
+            error is http.ClientException,
+      );
     }
   }
 

@@ -35,7 +35,11 @@ func New(db *sql.DB, jwtSecret []byte) *Server {
 }
 
 func (s *Server) Init(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS users (
+	// ponytail: one connection keeps connection-scoped SQLite PRAGMAs effective.
+	s.db.SetMaxOpenConns(1)
+	_, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;
+	PRAGMA busy_timeout=5000;
+	CREATE TABLE IF NOT EXISTS users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		phone TEXT UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,

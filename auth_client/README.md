@@ -2,6 +2,10 @@
 
 Boqinai Flutter 应用共用的手机号/密码认证客户端。
 
+Token 默认保存在系统安全存储（Android Keystore 加密存储、Apple Keychain）中。仅测试或低安全场景才显式传入文件型 `TokenStore`。Android 最低 API 23；各平台配置见
+[`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage)。`restore(validate: true)` 遇到网络失败时保留缓存会话，只有服务端明确返回 401 才清除。
+
+
 公共库负责注册/登录协议、Token 持久化、恢复、退出、Bearer 请求头，以及可选的 `/api/auth/me` 校验。表单、密码规则、错误文案和登录后的业务流程仍由各 App 负责。
 
 ```yaml

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,5 +67,28 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	}
 	if res := call("GET", "/private", "", ""); res.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestInitConfiguresSQLiteForConcurrentWrites(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := New(db, []byte("test-secret")).Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var journalMode string
+	var busyTimeout int
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if journalMode != "wal" || busyTimeout != 5000 {
+		t.Fatalf("journal_mode=%q busy_timeout=%d", journalMode, busyTimeout)
 	}
 }

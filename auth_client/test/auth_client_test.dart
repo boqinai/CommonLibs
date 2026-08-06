@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:auth_client/auth_client.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -46,6 +47,28 @@ void main() {
 
     expect(await client.restore(validate: true), isNull);
     expect(await store.read(), isNull);
+  });
+
+  test('restore keeps a cached session while offline', () async {
+    await store.write('cached');
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((_) => throw const SocketException('offline')),
+    );
+
+    expect(await client.restore(validate: true), 'cached');
+    expect(await store.read(), 'cached');
+  });
+
+  test('secure token store reads, writes, and clears tokens', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final secureStore = SecureTokenStore(name: 'test_session');
+
+    await secureStore.write('jwt');
+    expect(await secureStore.read(), 'jwt');
+    await secureStore.clear();
+    expect(await secureStore.read(), isNull);
   });
 
   test('registration exposes server status and message', () async {
