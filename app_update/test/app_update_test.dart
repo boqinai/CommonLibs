@@ -1,0 +1,103 @@
+import 'package:app_update/app_update.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  const context = UpdateRequestContext(
+    packageName: 'com.boqinai.example',
+    versionCode: 1000000,
+    deviceId: 'device-123',
+  );
+
+  test('checks the shared update protocol', () async {
+    final service = AppUpdateService(
+      updateApiUrl: 'https://api.example.com/update?token=abc',
+      requestContextLoader: () async => context,
+      client: MockClient((request) async {
+        expect(request.url.queryParameters['token'], 'abc');
+        expect(
+          request.url.queryParameters['package_name'],
+          context.packageName,
+        );
+        expect(request.url.queryParameters['version_code'], '1000000');
+        expect(request.url.queryParameters['device_id'], context.deviceId);
+        expect(request.url.queryParameters['channel'], 'stable');
+        return http.Response(
+          '{"update_available":true,"version_name":"1.1.0",'
+          '"download_url":"https://example.com/app.apk","force_update":true}',
+          200,
+        );
+      }),
+    );
+
+    final result = await service.checkForUpdate();
+
+    expect(result.status, UpdateCheckStatus.updateAvailable);
+    expect(result.update?.versionName, '1.1.0');
+    expect(result.update?.forceUpdate, isTrue);
+  });
+
+  test('uses DownloadManager and opens the downloaded APK', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    var progressQueries = 0;
+    var opened = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('app_update'), (
+          call,
+        ) async {
+          switch (call.method) {
+            case 'startDownload':
+              expect(call.arguments['url'], contains('v=1.1.0'));
+              return {'downloadId': 7, 'filePath': '/tmp/app.apk'};
+            case 'getDownloadProgress':
+              progressQueries++;
+              return progressQueries == 1
+                  ? {'status': 2, 'bytesDownloaded': 5, 'totalBytes': 10}
+                  : {'status': 8, 'bytesDownloaded': 10, 'totalBytes': 10};
+            case 'openApk':
+              opened = true;
+              return true;
+          }
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('app_update'), null),
+    );
+    int? downloadId;
+    final progress = <double>[];
+
+    final installed =
+        await AppUpdateService(
+          updateApiUrl: 'https://api.example.com/update',
+          requestContextLoader: () async => context,
+        ).downloadAndInstall(
+          'https://example.com/app.apk?token=abc',
+          version: '1.1.0',
+          onStarted: (id) => downloadId = id,
+          onProgress: progress.add,
+        );
+
+    expect(installed, isTrue);
+    expect(downloadId, 7);
+    expect(progress, [0.5, 1]);
+    expect(opened, isTrue);
+  });
+
+  test('rejects incomplete or unsafe server data', () {
+    expect(
+      AppUpdateService.parseResponse({
+        'update_available': true,
+        'version_name': '1.1.0',
+        'download_url': 'file:///tmp/app.apk',
+      }).status,
+      UpdateCheckStatus.failed,
+    );
+  });
+}
