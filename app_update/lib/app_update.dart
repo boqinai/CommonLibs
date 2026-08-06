@@ -1,3 +1,6 @@
+export 'update_check_schedule.dart';
+export 'update_download_controller.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -117,6 +120,7 @@ class AppUpdateService {
     String downloadUrl, {
     required String version,
     Duration downloadTimeout = const Duration(minutes: 30),
+    bool wifiOnly = false,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
   }) async {
@@ -134,6 +138,7 @@ class AppUpdateService {
               )
               .toString(),
           'version': version,
+          'wifiOnly': wifiOnly,
         },
       );
       final downloadId = task?['downloadId'] as int?;

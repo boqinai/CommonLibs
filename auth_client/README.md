@@ -23,3 +23,15 @@ await auth.logout();
 ```
 
 ChessGame 启动恢复使用 `restore(validate: true)`；MoneyMap 没有 `/me`，使用默认 `restore()`。
+
+## 认证后的业务请求
+
+```dart
+final data = await auth.authenticatedRequest(
+  'PUT',
+  '/api/document',
+  body: {'value': 7},
+);
+```
+
+支持 GET、POST、PUT、DELETE；自动添加 Bearer Token、编码/解析 JSON，并在 401 时清除失效会话。不再使用时调用 `auth.close()`。

@@ -1,6 +1,6 @@
 name: app_update
 description: Shared Android in-app update client for Boqinai Flutter apps.
-version: 0.1.0
+version: 0.2.0
 publish_to: none
 
 environment:
@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -23,3 +24,4 @@ flutter:
       android:
         package: com.boqinai.app_update
         pluginClass: AppUpdatePlugin
+

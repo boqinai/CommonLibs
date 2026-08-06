@@ -63,6 +63,7 @@ class AppUpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private fun startDownload(call: MethodCall, result: MethodChannel.Result) {
         val url = call.argument<String>("url")
         val version = call.argument<String>("version")
+        val wifiOnly = call.argument<Boolean>("wifiOnly") == true
         if (url.isNullOrBlank() || version.isNullOrBlank()) {
             result.error("invalid_args", "URL or version is empty", null)
             return
@@ -86,6 +87,9 @@ class AppUpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     fileName,
                 )
                 setMimeType(APK_MIME_TYPE)
+                if (wifiOnly) {
+                    setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+                }
             }
             val id = downloadManager.enqueue(request)
             result.success(mapOf("downloadId" to id, "filePath" to destination.absolutePath))

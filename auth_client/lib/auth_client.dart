@@ -110,10 +110,17 @@ class AuthClient {
     return data;
   }
 
+  Future<dynamic> authenticatedRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _request(method.toUpperCase(), path, body: body, authenticated: true);
   Future<void> logout() async {
     _token = null;
     await _tokenStore.clear();
   }
+
+  void close() => _client.close();
 
   Future<dynamic> _request(
     String method,
@@ -133,10 +140,17 @@ class AuthClient {
       final request = switch (method) {
         'GET' => _client.get(uri, headers: headers),
         'POST' => _client.post(uri, headers: headers, body: jsonEncode(body)),
+        'PUT' => _client.put(uri, headers: headers, body: jsonEncode(body)),
+        'DELETE' => _client.delete(
+          uri,
+          headers: headers,
+          body: body == null ? null : jsonEncode(body),
+        ),
         _ => throw ArgumentError.value(method, 'method'),
       };
       final response = await request.timeout(const Duration(seconds: 30));
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (authenticated && response.statusCode == 401) await logout();
         throw AuthException(
           response.body.trim().isEmpty ? '认证请求失败' : response.body.trim(),
           statusCode: response.statusCode,

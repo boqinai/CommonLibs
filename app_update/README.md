@@ -46,3 +46,25 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 ## 生命周期与安装权限
 
 `AppUpdateService` 持有 HTTP Client；不再使用时必须调用 `close()`（在 `StatefulWidget` 中放到 `dispose()`）。`downloadAndInstall` 默认最多等待 30 分钟，超时会取消 DownloadManager 任务，可通过 `downloadTimeout` 调整。Android 8.0+ 未授权安装未知应用时，插件会打开当前应用对应的系统设置页，用户授权后重试安装。
+
+## 自动检查与下载控制器
+
+```dart
+final schedule = UpdateCheckSchedule();
+if (await schedule.isDue(frequency: UpdateCheckFrequency.daily)) {
+  final result = await updater.checkForUpdate();
+  await schedule.markChecked();
+}
+
+final controller = UpdateDownloadController(
+  service: updater,
+  update: result.update!,
+  wifiOnly: true,
+);
+controller.addListener(() {
+  print('${controller.state}: ${controller.progress}');
+});
+await controller.start(); // retry() / cancel()
+```
+
+调度模块只持久化最后检查时间；是否启用、频率选择和界面文案仍由 App 决定。`wifiOnly: true` 会直接使用 DownloadManager 的 Wi-Fi 网络约束。
