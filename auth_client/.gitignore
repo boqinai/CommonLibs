@@ -2,3 +2,4 @@
 build/
 coverage/
 pubspec.lock
+.flutter-plugins-dependencies
