@@ -1,3 +1,9 @@
+## 0.4.0
+
+- Add one-time legacy TokenStorage migration.
+- Require HTTPS for remote authentication endpoints.
+- Upgrade flutter_secure_storage to 11.0.0.
+
 ## 0.3.0
 
 - Store tokens in platform secure storage by default.

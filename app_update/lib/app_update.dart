@@ -127,6 +127,8 @@ class AppUpdateService {
     if (!_supportsAndroid || !_isHttpUrl(downloadUrl) || version.isEmpty) {
       return false;
     }
+    int? activeDownloadId;
+    var completed = false;
     try {
       final source = Uri.parse(downloadUrl);
       final task = await _platform.invokeMapMethod<String, dynamic>(
@@ -141,35 +143,50 @@ class AppUpdateService {
           'wifiOnly': wifiOnly,
         },
       );
-      final downloadId = task?['downloadId'] as int?;
+      activeDownloadId = task?['downloadId'] as int?;
       final filePath = task?['filePath'] as String?;
-      if (downloadId == null || filePath == null) return false;
-      onStarted?.call(downloadId);
+      if (activeDownloadId == null) return false;
+      if (filePath == null) {
+        await _cancelQuietly(activeDownloadId);
+        return false;
+      }
+      onStarted?.call(activeDownloadId);
 
       final elapsed = Stopwatch()..start();
       while (elapsed.elapsed < downloadTimeout) {
         await Future<void>.delayed(const Duration(milliseconds: 500));
         final progress = await _platform.invokeMapMethod<String, dynamic>(
           'getDownloadProgress',
-          {'downloadId': downloadId},
+          {'downloadId': activeDownloadId},
         );
-        if (progress == null) return false;
+        if (progress == null) {
+          await _cancelQuietly(activeDownloadId);
+          return false;
+        }
         final status = progress['status'] as int?;
         final downloaded = progress['bytesDownloaded'] as int? ?? 0;
         final total = progress['totalBytes'] as int? ?? 0;
         if (status == 8) {
+          completed = true;
           onProgress?.call(1);
           return await _platform.invokeMethod<bool>('openApk', {
                 'path': filePath,
               }) ??
               false;
         }
-        if (status == 16) return false;
-        onProgress?.call(total > 0 ? downloaded / total : 0);
+        if (status == 16) {
+          await _cancelQuietly(activeDownloadId);
+          return false;
+        }
+        final value = total > 0 ? downloaded / total : 0.0;
+        onProgress?.call(value.clamp(0.0, 1.0).toDouble());
       }
-      await cancelDownload(downloadId);
+      await _cancelQuietly(activeDownloadId);
       return false;
     } catch (error) {
+      if (activeDownloadId != null && !completed) {
+        await _cancelQuietly(activeDownloadId);
+      }
       debugPrint('下载或安装 APK 失败: $error');
       return false;
     }
@@ -177,10 +194,19 @@ class AppUpdateService {
 
   Future<bool> cancelDownload(int downloadId) async {
     if (!_supportsAndroid) return false;
-    return await _platform.invokeMethod<bool>('cancelDownload', {
-          'downloadId': downloadId,
-        }) ??
-        false;
+    try {
+      return await _platform.invokeMethod<bool>('cancelDownload', {
+            'downloadId': downloadId,
+          }) ??
+          false;
+    } catch (error) {
+      debugPrint('取消 APK 下载失败: $error');
+      return false;
+    }
+  }
+
+  Future<void> _cancelQuietly(int downloadId) async {
+    await cancelDownload(downloadId);
   }
 
   void close() => _client.close();
@@ -209,7 +235,11 @@ class AppUpdateService {
   static bool _isHttpUrl(String value) {
     final uri = Uri.tryParse(value);
     return uri != null &&
-        (uri.scheme == 'https' || uri.scheme == 'http') &&
-        uri.host.isNotEmpty;
+        uri.host.isNotEmpty &&
+        (uri.scheme == 'https' ||
+            (uri.scheme == 'http' && _isLoopback(uri.host)));
   }
+
+  static bool _isLoopback(String host) =>
+      host == 'localhost' || host == '127.0.0.1' || host == '::1';
 }

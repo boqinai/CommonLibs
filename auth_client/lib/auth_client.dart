@@ -44,6 +44,36 @@ class SecureTokenStore implements TokenStorage {
   Future<void> clear() => _storage.delete(key: name);
 }
 
+class MigratingTokenStorage implements TokenStorage {
+  MigratingTokenStorage({required this.primary, required this.legacy});
+
+  final TokenStorage primary;
+  final TokenStorage legacy;
+
+  @override
+  Future<String?> read() async {
+    final current = await primary.read();
+    if (current != null) return current;
+    final token = await legacy.read();
+    if (token == null) return null;
+    await primary.write(token);
+    await legacy.clear();
+    return token;
+  }
+
+  @override
+  Future<void> write(String token) async {
+    await primary.write(token);
+    await legacy.clear();
+  }
+
+  @override
+  Future<void> clear() async {
+    await primary.clear();
+    await legacy.clear();
+  }
+}
+
 class TokenStore implements TokenStorage {
   TokenStore({this.name = 'auth_session', Future<File> Function()? fileFactory})
     : _fileFactory = fileFactory;
@@ -210,10 +240,14 @@ class AuthClient {
     final trimmed = value.trim().replaceFirst(RegExp(r'/+$'), '');
     final uri = Uri.tryParse(trimmed);
     if (uri == null ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
+        uri.host.isEmpty ||
+        (uri.scheme != 'https' &&
+            !(uri.scheme == 'http' && _isLoopback(uri.host)))) {
       throw ArgumentError.value(value, 'baseUrl', '必须是 HTTP(S) URL');
     }
     return trimmed;
   }
+
+  static bool _isLoopback(String host) =>
+      host == 'localhost' || host == '127.0.0.1' || host == '::1';
 }

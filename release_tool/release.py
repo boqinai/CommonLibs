@@ -7,14 +7,26 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import urlparse
 
 UPDATE_CENTER = "https://api.boqinai.com/updatecenter"
 APK_MIME = "application/vnd.android.package-archive"
 
 
+def validate_release_options(args) -> None:
+    uri = urlparse(args.update_center)
+    loopback = uri.hostname in {"localhost", "127.0.0.1", "::1"}
+    if not uri.hostname or (uri.scheme != "https" and not (uri.scheme == "http" and loopback)):
+        raise ValueError("update center must use HTTPS (HTTP is allowed only for localhost)")
+    if not 0 <= args.rollout <= 100:
+        raise ValueError("rollout must be between 0 and 100")
+    if args.min_version < 0:
+        raise ValueError("min-version must be non-negative")
+
+
 def read_version(project: Path) -> str:
     match = re.search(
-        r"^version:\s*([^+\s]+)(?:\+\d+)?\s*$",
+        r"^version:\s*([^\s]+)\s*$",
         (project / "pubspec.yaml").read_text(encoding="utf-8"),
         re.MULTILINE,
     )
@@ -93,6 +105,7 @@ def publish_github(apk: Path, repo: str, version: str, notes: str) -> None:
 def update_center_request(
     apk: Path, app_name: str, args, token: str
 ) -> tuple[list[str], str]:
+    validate_release_options(args)
     endpoint = f"{args.update_center.rstrip('/')}/api/v1/releases"
     command = [
         "curl",
@@ -106,24 +119,24 @@ def update_center_request(
         endpoint,
         "-F",
         f"apk=@{apk};type={APK_MIME}",
-        "-F",
+        "--form-string",
         f"channel={args.channel}",
-        "-F",
+        "--form-string",
         f"release_notes={args.notes}",
-        "-F",
+        "--form-string",
         f"force_update={str(args.force).lower()}",
-        "-F",
+        "--form-string",
         f"rollout_percent={args.rollout}",
-        "-F",
+        "--form-string",
         f"min_supported_version_code={args.min_version}",
-        "-F",
+        "--form-string",
         f"publish={str(args.publish).lower()}",
-        "-F",
+        "--form-string",
         f"app_name={app_name}",
-        "-F",
+        "--form-string",
         f"app={app_name}",
     ]
-    return command, f"Authorization: Bearer {token}\\n"
+    return command, f"Authorization: Bearer {token}\n"
 
 
 def parser() -> argparse.ArgumentParser:

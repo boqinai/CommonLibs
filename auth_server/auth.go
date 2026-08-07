@@ -35,8 +35,6 @@ func New(db *sql.DB, jwtSecret []byte) *Server {
 }
 
 func (s *Server) Init(ctx context.Context) error {
-	// ponytail: one connection keeps connection-scoped SQLite PRAGMAs effective.
-	s.db.SetMaxOpenConns(1)
 	_, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;
 	PRAGMA busy_timeout=5000;
 	CREATE TABLE IF NOT EXISTS users (
@@ -193,8 +191,11 @@ func credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) 
 		return "", "", false
 	}
 	input.Phone = strings.TrimSpace(input.Phone)
-	if len(input.Phone) < 6 || len(input.Password) < 6 {
-		http.Error(w, "phone and password must contain at least 6 characters", http.StatusBadRequest)
+	if len(input.Phone) < 6 ||
+		len(input.Phone) > 32 ||
+		len(input.Password) < 6 ||
+		len(input.Password) > 72 {
+		http.Error(w, "phone must contain 6-32 bytes and password 6-72 bytes", http.StatusBadRequest)
 		return "", "", false
 	}
 	return input.Phone, input.Password, true

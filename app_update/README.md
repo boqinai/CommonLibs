@@ -68,3 +68,5 @@ await controller.start(); // retry() / cancel()
 ```
 
 调度模块只持久化最后检查时间；是否启用、频率选择和界面文案仍由 App 决定。`wifiOnly: true` 会直接使用 DownloadManager 的 Wi-Fi 网络约束。
+
+远程更新接口和 APK 地址必须使用 HTTPS；仅 `localhost`、`127.0.0.1` 和 `::1` 可使用 HTTP。界面销毁时调用 `controller.dispose()`，控制器会取消仍在运行的下载。

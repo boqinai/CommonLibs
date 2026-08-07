@@ -21,7 +21,7 @@ class ReleaseToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            self.assertEqual(release.read_version(project), "1.2.3")
+            self.assertEqual(release.read_version(project), "1.2.3+1002003")
             self.assertEqual(release.read_app_name(project), "示例")
 
     def test_update_center_command_preserves_release_options(self):
@@ -44,7 +44,7 @@ class ReleaseToolTest(unittest.TestCase):
         self.assertIn("rollout_percent=25", command)
         self.assertIn("min_supported_version_code=100", command)
         self.assertNotIn("secret", command)
-        self.assertEqual(headers, "Authorization: Bearer secret\\n")
+        self.assertEqual(headers, "Authorization: Bearer secret\n")
 
 
 if __name__ == "__main__":

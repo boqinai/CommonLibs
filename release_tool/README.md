@@ -17,3 +17,5 @@ python release_tool/release.py app.apk --project . --app-name 钱在哪 --publis
 - `UPDATE_CENTER_URL`：默认 `https://api.boqinai.com/updatecenter`。
 
 可选参数包括 `--channel`、`--notes`、`--force`、`--rollout`、`--min-version` 和 `--no-update-center`。
+
+发布标识保留 Flutter 完整版本（例如 `1.2.3+1002003`），避免仅增加 build number 时覆盖已有 Release。远程更新中心必须使用 HTTPS；HTTP 仅允许本机测试地址。

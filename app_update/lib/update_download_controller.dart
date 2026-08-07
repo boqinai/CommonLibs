@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'app_update.dart';
@@ -20,42 +22,69 @@ class UpdateDownloadController extends ChangeNotifier {
   UpdateDownloadState state = UpdateDownloadState.idle;
   double? progress;
   int? downloadId;
+  int _generation = 0;
+  bool _disposed = false;
 
   Future<void> start() async {
     if (state == UpdateDownloadState.downloading) return;
+    final generation = ++_generation;
     state = UpdateDownloadState.downloading;
     progress = null;
     downloadId = null;
-    notifyListeners();
+    _notify();
 
-    final installed = await service.downloadAndInstall(
-      update.downloadUrl,
-      version: update.versionName,
-      downloadTimeout: downloadTimeout,
-      wifiOnly: wifiOnly,
-      onStarted: (id) {
-        downloadId = id;
-        notifyListeners();
-      },
-      onProgress: (value) {
-        progress = value;
-        notifyListeners();
-      },
-    );
-    if (state == UpdateDownloadState.cancelled) return;
+    bool installed;
+    try {
+      installed = await service.downloadAndInstall(
+        update.downloadUrl,
+        version: update.versionName,
+        downloadTimeout: downloadTimeout,
+        wifiOnly: wifiOnly,
+        onStarted: (id) {
+          if (generation != _generation || _disposed) {
+            unawaited(service.cancelDownload(id));
+            return;
+          }
+          downloadId = id;
+          _notify();
+        },
+        onProgress: (value) {
+          if (generation != _generation || _disposed) return;
+          progress = value;
+          _notify();
+        },
+      );
+    } catch (_) {
+      installed = false;
+    }
+    if (generation != _generation || _disposed) return;
     state = installed
         ? UpdateDownloadState.installed
         : UpdateDownloadState.failed;
-    notifyListeners();
+    _notify();
   }
 
   Future<void> retry() => start();
 
   Future<void> cancel() async {
+    if (state != UpdateDownloadState.downloading) return;
     final id = downloadId;
-    if (id == null || state != UpdateDownloadState.downloading) return;
+    ++_generation;
     state = UpdateDownloadState.cancelled;
-    notifyListeners();
-    await service.cancelDownload(id);
+    _notify();
+    if (id != null) await service.cancelDownload(id);
+  }
+
+  @override
+  void dispose() {
+    final id = state == UpdateDownloadState.downloading ? downloadId : null;
+    _disposed = true;
+    ++_generation;
+    if (id != null) unawaited(service.cancelDownload(id));
+    super.dispose();
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
   }
 }
