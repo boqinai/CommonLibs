@@ -9,16 +9,31 @@ import 'package:path_provider/path_provider.dart';
 class AuthException implements Exception {
   const AuthException(
     this.message, {
+    this.code,
     this.statusCode,
     this.isNetworkFailure = false,
   });
 
   final String message;
+  final String? code;
   final int? statusCode;
   final bool isNetworkFailure;
 
   @override
   String toString() => message;
+}
+
+abstract final class AuthErrorCode {
+  static const invalidRequest = 'invalid_request';
+  static const invalidCredentialsFormat = 'invalid_credentials_format';
+  static const phoneAlreadyRegistered = 'phone_already_registered';
+  static const invalidCredentials = 'invalid_credentials';
+  static const unauthorized = 'unauthorized';
+  static const userNotFound = 'user_not_found';
+  static const methodNotAllowed = 'method_not_allowed';
+  static const internalError = 'internal_error';
+  static const invalidResponse = 'invalid_response';
+  static const networkFailure = 'network_failure';
 }
 
 abstract interface class TokenStorage {
@@ -145,7 +160,10 @@ class AuthClient {
     );
     final token = data is Map<String, dynamic> ? data['token'] : null;
     if (token is! String || token.isEmpty) {
-      throw const AuthException('登录响应缺少 token');
+      throw const AuthException(
+        '登录响应缺少 token',
+        code: AuthErrorCode.invalidResponse,
+      );
     }
     await _tokenStore.write(token);
     _token = token;
@@ -169,7 +187,10 @@ class AuthClient {
   Future<Map<String, dynamic>> currentUser() async {
     final data = await _request('GET', '/api/auth/me', authenticated: true);
     if (data is! Map<String, dynamic>) {
-      throw const AuthException('用户信息响应格式错误');
+      throw const AuthException(
+        '用户信息响应格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
     }
     return data;
   }
@@ -193,7 +214,11 @@ class AuthClient {
     bool authenticated = false,
   }) async {
     if (authenticated && !isLoggedIn) {
-      throw const AuthException('未登录', statusCode: 401);
+      throw const AuthException(
+        '未登录',
+        code: AuthErrorCode.unauthorized,
+        statusCode: 401,
+      );
     }
     final headers = <String, String>{
       'Content-Type': 'application/json; charset=utf-8',
@@ -215,8 +240,10 @@ class AuthClient {
       final response = await request.timeout(const Duration(seconds: 30));
       if (response.statusCode < 200 || response.statusCode >= 300) {
         if (authenticated && response.statusCode == 401) await logout();
+        final error = _decodeError(response.body);
         throw AuthException(
-          response.body.trim().isEmpty ? '认证请求失败' : response.body.trim(),
+          error.message,
+          code: error.code,
           statusCode: response.statusCode,
         );
       }
@@ -228,6 +255,7 @@ class AuthClient {
     } catch (error) {
       throw AuthException(
         '认证请求失败: $error',
+        code: AuthErrorCode.networkFailure,
         isNetworkFailure:
             error is TimeoutException ||
             error is SocketException ||
@@ -250,4 +278,22 @@ class AuthClient {
 
   static bool _isLoopback(String host) =>
       host == 'localhost' || host == '127.0.0.1' || host == '::1';
+
+  static ({String message, String? code}) _decodeError(String body) {
+    final text = body.trim();
+    if (text.isEmpty) return (message: '认证请求失败', code: null);
+    try {
+      final data = jsonDecode(text);
+      if (data is Map<String, dynamic>) {
+        final message = data['message'];
+        final code = data['code'];
+        if (message is String && message.isNotEmpty) {
+          return (message: message, code: code is String ? code : null);
+        }
+      }
+    } catch (_) {
+      // 兼容旧服务端的纯文本错误响应。
+    }
+    return (message: text, code: null);
+  }
 }

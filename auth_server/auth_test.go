@@ -49,9 +49,19 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	}
 	if res := call("POST", "/api/auth/register", "", `{"phone":"13800000000","password":"123456"}`); res.Code != http.StatusConflict {
 		t.Fatalf("duplicate: %d %s", res.Code, res.Body.String())
+	} else {
+		var failure struct{ Code string }
+		if json.Unmarshal(res.Body.Bytes(), &failure) != nil || failure.Code != "phone_already_registered" {
+			t.Fatalf("duplicate error: %s", res.Body.String())
+		}
 	}
 	if res := call("POST", "/api/auth/login", "", `{"phone":"13800000000","password":"bad-password"}`); res.Code != http.StatusUnauthorized {
 		t.Fatalf("bad login: %d %s", res.Code, res.Body.String())
+	} else {
+		var failure struct{ Code string }
+		if json.Unmarshal(res.Body.Bytes(), &failure) != nil || failure.Code != "invalid_credentials" {
+			t.Fatalf("login error: %s", res.Body.String())
+		}
 	}
 
 	login := call("POST", "/api/auth/login", "", `{"phone":"13800000000","password":"123456"}`)
@@ -67,6 +77,11 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	}
 	if res := call("GET", "/private", "", ""); res.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized: %d %s", res.Code, res.Body.String())
+	} else {
+		var failure struct{ Code string }
+		if json.Unmarshal(res.Body.Bytes(), &failure) != nil || failure.Code != "unauthorized" {
+			t.Fatalf("unauthorized error: %s", res.Body.String())
+		}
 	}
 }
 

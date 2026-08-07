@@ -54,7 +54,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	phone, password, ok := credentials(w, r)
@@ -63,7 +63,7 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, "password hashing failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal_error", "password hashing failed")
 		return
 	}
 	_, err = s.db.ExecContext(
@@ -76,10 +76,10 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var exists int
 		if s.db.QueryRowContext(r.Context(), "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists) == nil {
-			http.Error(w, "phone already registered", http.StatusConflict)
+			writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
 			return
 		}
-		http.Error(w, "registration failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
@@ -87,7 +87,7 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	phone, password, ok := credentials(w, r)
@@ -105,12 +105,12 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		hash = string(s.dummyHash)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "login failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal_error", "login failed")
 		return
 	}
 	passwordError := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	if errors.Is(err, sql.ErrNoRows) || passwordError != nil {
-		http.Error(w, "invalid phone or password", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid phone or password")
 		return
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -119,7 +119,7 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	})
 	signed, err := token.SignedString(s.secret)
 	if err != nil {
-		http.Error(w, "token creation failed", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal_error", "token creation failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": signed})
@@ -127,17 +127,17 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 	id, ok := UserID(r)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 	var phone string
 	if err := s.db.QueryRowContext(r.Context(), "SELECT phone FROM users WHERE id=?", id).Scan(&phone); err != nil {
-		http.Error(w, "user not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "phone": phone})
@@ -147,7 +147,7 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, err := s.authenticate(r.Header.Get("Authorization"))
 		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, id)))
@@ -187,7 +187,7 @@ func credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request")
 		return "", "", false
 	}
 	input.Phone = strings.TrimSpace(input.Phone)
@@ -195,7 +195,7 @@ func credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) 
 		len(input.Phone) > 32 ||
 		len(input.Password) < 6 ||
 		len(input.Password) > 72 {
-		http.Error(w, "phone must contain 6-32 bytes and password 6-72 bytes", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid_credentials_format", "phone must contain 6-32 bytes and password 6-72 bytes")
 		return "", "", false
 	}
 	return input.Phone, input.Password, true
@@ -205,4 +205,8 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "message": message})
 }

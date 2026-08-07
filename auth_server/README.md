@@ -2,7 +2,9 @@
 
 Boqinai Go 服务共用的手机号/密码认证模块：SQLite 用户表、bcrypt 密码哈希、30 天 HS256 JWT、注册、登录、`/me` 和认证中间件。
 
-`Init` 会启用 SQLite WAL 和 5 秒 busy timeout，并限制为单连接以保证连接级 PRAGMA 对所有认证请求生效。
+错误响应为 `{"code":"invalid_credentials","message":"invalid phone or password"}`。客户端应根据稳定的 `code` 翻译提示，`message` 仅用于日志和兼容旧客户端。
+
+`Init` 会启用 SQLite WAL 和 5 秒 busy timeout，但不会修改宿主配置的连接池大小。
 
 ```go
 auth := authserver.New(db, []byte(os.Getenv("JWT_SECRET")))

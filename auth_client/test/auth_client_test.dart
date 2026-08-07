@@ -71,12 +71,16 @@ void main() {
     expect(await secureStore.read(), isNull);
   });
 
-  test('registration exposes server status and message', () async {
+  test('registration exposes server status, code, and message', () async {
     final client = AuthClient(
       baseUrl: 'https://example.test',
       tokenStore: store,
       client: MockClient(
-        (_) async => http.Response('phone already registered', 409),
+        (_) async => http.Response(
+          '{"code":"phone_already_registered",'
+          '"message":"phone already registered"}',
+          409,
+        ),
       ),
     );
 
@@ -86,9 +90,37 @@ void main() {
         isA<AuthException>()
             .having((error) => error.statusCode, 'statusCode', 409)
             .having(
+              (error) => error.code,
+              'code',
+              AuthErrorCode.phoneAlreadyRegistered,
+            )
+            .having(
               (error) => error.message,
               'message',
               'phone already registered',
+            ),
+      ),
+    );
+  });
+
+  test('plain text errors from older servers remain supported', () async {
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient(
+        (_) async => http.Response('invalid phone or password', 401),
+      ),
+    );
+
+    expect(
+      () => client.login('13800000000', 'bad-password'),
+      throwsA(
+        isA<AuthException>()
+            .having((error) => error.code, 'code', isNull)
+            .having(
+              (error) => error.message,
+              'message',
+              'invalid phone or password',
             ),
       ),
     );

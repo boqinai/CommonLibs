@@ -8,6 +8,8 @@ Token 默认保存在系统安全存储（Android Keystore 加密存储、Apple 
 
 公共库负责注册/登录协议、Token 持久化、恢复、退出、Bearer 请求头，以及可选的 `/api/auth/me` 校验。表单、密码规则、错误文案和登录后的业务流程仍由各 App 负责。
 
+`AuthException.code` 提供稳定的机器错误码，客户端应使用 `AuthErrorCode` 翻译用户提示；`message` 保留服务端原始信息。客户端仍兼容旧服务端的纯文本错误响应，此时 `code` 为 `null`。
+
 ```yaml
 dependencies:
   auth_client:
