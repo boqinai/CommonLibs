@@ -126,6 +126,27 @@ void main() {
     );
   });
 
+  test('supports a service-specific authentication path', () async {
+    final client = AuthClient(
+      baseUrl: 'https://example.test/penny',
+      authPath: '/auth',
+      tokenStore: store,
+      client: MockClient((request) async {
+        expect(request.url.path, '/penny/auth/login');
+        return http.Response('{"token":"jwt"}', 200);
+      }),
+    );
+
+    expect(await client.login('13800000000', '123456'), 'jwt');
+  });
+
+  test('rejects an invalid authentication path', () {
+    expect(
+      () => AuthClient(baseUrl: 'https://example.test', authPath: 'auth'),
+      throwsArgumentError,
+    );
+  });
+
   test('logout clears memory and disk', () async {
     final client = AuthClient(
       baseUrl: 'https://example.test',

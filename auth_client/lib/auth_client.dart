@@ -127,13 +127,16 @@ class TokenStore implements TokenStorage {
 class AuthClient {
   AuthClient({
     required String baseUrl,
+    String authPath = '/api/auth',
     http.Client? client,
     TokenStorage? tokenStore,
   }) : baseUrl = _normalizeBaseUrl(baseUrl),
+       authPath = _normalizeAuthPath(authPath),
        _client = client ?? http.Client(),
        _tokenStore = tokenStore ?? SecureTokenStore();
 
   final String baseUrl;
+  final String authPath;
   final http.Client _client;
   final TokenStorage _tokenStore;
   String? _token;
@@ -147,7 +150,7 @@ class AuthClient {
   Future<void> register(String phone, String password) async {
     await _request(
       'POST',
-      '/api/auth/register',
+      '$authPath/register',
       body: {'phone': phone.trim(), 'password': password},
     );
   }
@@ -155,7 +158,7 @@ class AuthClient {
   Future<String> login(String phone, String password) async {
     final data = await _request(
       'POST',
-      '/api/auth/login',
+      '$authPath/login',
       body: {'phone': phone.trim(), 'password': password},
     );
     final token = data is Map<String, dynamic> ? data['token'] : null;
@@ -185,7 +188,7 @@ class AuthClient {
   }
 
   Future<Map<String, dynamic>> currentUser() async {
-    final data = await _request('GET', '/api/auth/me', authenticated: true);
+    final data = await _request('GET', '$authPath/me', authenticated: true);
     if (data is! Map<String, dynamic>) {
       throw const AuthException(
         '用户信息响应格式错误',
@@ -274,6 +277,14 @@ class AuthClient {
       throw ArgumentError.value(value, 'baseUrl', '必须是 HTTP(S) URL');
     }
     return trimmed;
+  }
+
+  static String _normalizeAuthPath(String value) {
+    final path = value.trim().replaceFirst(RegExp(r'/+$'), '');
+    if (!path.startsWith('/') || path.contains('?') || path.contains('#')) {
+      throw ArgumentError.value(value, 'authPath', '必须是绝对 URL 路径');
+    }
+    return path;
   }
 
   static bool _isLoopback(String host) =>

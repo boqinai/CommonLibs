@@ -28,6 +28,8 @@ final headers = auth.authorizationHeaders;
 await auth.logout();
 ```
 
+认证端点默认位于 `/api/auth`。旧服务使用其他路径时可传入 `authPath`，例如 `AuthClient(baseUrl: apiUrl, authPath: '/auth')`。
+
 ChessGame 启动恢复使用 `restore(validate: true)`；MoneyMap 没有 `/me`，使用默认 `restore()`。
 
 ## 认证后的业务请求
