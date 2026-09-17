@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:auth_client/auth_client.dart';
@@ -145,6 +146,48 @@ void main() {
     expect(refreshCalls, 1);
     expect(results, everyElement({'ok': true}));
     expect(await store.read(), 'fresh');
+  });
+
+  test('logout wins over an in-flight token refresh', () async {
+    await store.write('expired');
+    final refreshStarted = Completer<void>();
+    final refreshResult = Completer<String?>();
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      onRefreshToken: () {
+        refreshStarted.complete();
+        return refreshResult.future;
+      },
+      client: MockClient((_) async => http.Response('{}', 401)),
+    );
+    addTearDown(client.close);
+    await client.restore();
+
+    final request = client.authenticatedRequest('GET', '/api/private');
+    await refreshStarted.future;
+    await client.logout();
+    refreshResult.complete('stale-token');
+
+    await expectLater(request, throwsA(isA<AuthException>()));
+    expect(client.isLoggedIn, isFalse);
+    expect(await store.read(), isNull);
+  });
+
+  test('unsupported methods remain argument errors', () async {
+    await store.write('jwt');
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((_) async => http.Response('{}', 200)),
+    );
+    addTearDown(client.close);
+    await client.restore();
+
+    await expectLater(
+      client.authenticatedRequest('TRACE', '/api/private'),
+      throwsArgumentError,
+    );
   });
 
   test('close releases the HTTP client', () {

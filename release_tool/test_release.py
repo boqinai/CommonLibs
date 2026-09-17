@@ -44,7 +44,8 @@ class ReleaseToolTest(unittest.TestCase):
         self.assertIn("rollout_percent=25", command)
         self.assertIn("min_supported_version_code=100", command)
         self.assertNotIn("secret", command)
-        self.assertEqual(headers, "Authorization: Bearer secret\n")
+        self.assertIn("Authorization: Bearer secret\n", headers)
+        self.assertIn("Idempotency-Key: ", headers)
 
     def test_reads_quoted_version_and_string_resource_label(self):
         with tempfile.TemporaryDirectory() as raw:

@@ -21,6 +21,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --fatal-infos
       - run: flutter test
 
@@ -49,6 +50,7 @@ jobs:
           go-version-file: auth_server/go.mod
           cache-dependency-path: auth_server/go.sum
       - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"
       - run: go test ./...
 
   python:
@@ -61,5 +63,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - uses: astral-sh/ruff-action@v3
       - run: python -m unittest discover -v
-      - run: python -m py_compile release.py test_release.py test_review.py test_release_security.py
+      - run: python -m compileall -q .

@@ -11,18 +11,38 @@ import 'package:http/http.dart' as http;
 
 enum UpdateCheckStatus { updateAvailable, upToDate, failed, unsupported }
 
+enum UpdateFailureCode {
+  invalidInput,
+  downloadInProgress,
+  downloadFailed,
+  timedOut,
+  platform,
+}
+
+class UpdateFailure {
+  const UpdateFailure(this.code, this.message, {this.cause});
+
+  final UpdateFailureCode code;
+  final String message;
+  final Object? cause;
+}
+
 class AppUpdateInfo {
   const AppUpdateInfo({
     required this.versionName,
     required this.downloadUrl,
     required this.forceUpdate,
     this.releaseNotes = '',
+    this.sha256,
+    this.fileSize,
   });
 
   final String versionName;
   final String downloadUrl;
   final bool forceUpdate;
   final String releaseNotes;
+  final String? sha256;
+  final int? fileSize;
 }
 
 class UpdateCheckResult {
@@ -70,7 +90,17 @@ class AppUpdateService {
     }
     final versionName = data['version_name']?.toString() ?? '';
     final downloadUrl = data['download_url']?.toString() ?? '';
+    final sha256 = data['sha256']?.toString().trim();
+    final fileSize = data['file_size'];
     if (versionName.isEmpty || !_isHttpUrl(downloadUrl)) {
+      return const UpdateCheckResult(UpdateCheckStatus.failed);
+    }
+    if (sha256 != null &&
+        sha256.isNotEmpty &&
+        !RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(sha256)) {
+      return const UpdateCheckResult(UpdateCheckStatus.failed);
+    }
+    if (fileSize != null && (fileSize is! int || fileSize <= 0)) {
       return const UpdateCheckResult(UpdateCheckStatus.failed);
     }
     return UpdateCheckResult(
@@ -80,6 +110,8 @@ class AppUpdateService {
         downloadUrl: downloadUrl,
         forceUpdate: data['force_update'] == true,
         releaseNotes: data['release_notes']?.toString() ?? '',
+        sha256: sha256?.isEmpty == true ? null : sha256,
+        fileSize: fileSize as int?,
       ),
     );
   }
@@ -125,12 +157,27 @@ class AppUpdateService {
     String downloadUrl, {
     required String version,
     Duration downloadTimeout = const Duration(minutes: 30),
+    Duration inactivityTimeout = const Duration(seconds: 30),
     bool wifiOnly = false,
+    String? expectedSha256,
+    int? expectedSize,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
     void Function(String filePath)? onDownloaded,
+    void Function(UpdateFailure failure)? onFailure,
   }) async {
-    if (!_supportsAndroid || !_isHttpUrl(downloadUrl) || version.isEmpty) {
+    final validSha256 =
+        expectedSha256 == null ||
+        RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(expectedSha256);
+    if (!_supportsAndroid ||
+        !_isHttpUrl(downloadUrl) ||
+        version.isEmpty ||
+        !validSha256 ||
+        (expectedSize != null && expectedSize <= 0) ||
+        inactivityTimeout <= Duration.zero) {
+      onFailure?.call(
+        const UpdateFailure(UpdateFailureCode.invalidInput, '更新下载参数无效'),
+      );
       return false;
     }
     int? activeDownloadId;
@@ -147,12 +194,22 @@ class AppUpdateService {
               .toString(),
           'version': version,
           'wifiOnly': wifiOnly,
+          'sha256': expectedSha256,
+          'fileSize': expectedSize,
         },
       );
       activeDownloadId = task?['downloadId'] as int?;
       final filePath = task?['filePath'] as String?;
-      if (activeDownloadId == null) return false;
+      if (activeDownloadId == null) {
+        onFailure?.call(
+          const UpdateFailure(UpdateFailureCode.platform, '原生下载任务未返回任务 ID'),
+        );
+        return false;
+      }
       if (filePath == null) {
+        onFailure?.call(
+          const UpdateFailure(UpdateFailureCode.platform, '原生下载任务未返回文件路径'),
+        );
         await _cancelQuietly(activeDownloadId);
         return false;
       }
@@ -169,7 +226,12 @@ class AppUpdateService {
           onDownloaded?.call(filePath);
           return await openApk(filePath);
         }
-        if (status == 16) return false;
+        if (status == 16) {
+          onFailure?.call(
+            const UpdateFailure(UpdateFailureCode.downloadFailed, 'APK 下载失败'),
+          );
+          return false;
+        }
         onProgress?.call(
           (total > 0 ? downloaded / total : 0.0).clamp(0.0, 1.0).toDouble(),
         );
@@ -181,6 +243,7 @@ class AppUpdateService {
           : const Duration(seconds: 1);
       StreamIterator<dynamic>? events;
       var receivedFirstEvent = false;
+      final elapsed = Stopwatch()..start();
       try {
         events = StreamIterator<dynamic>(_events.receiveBroadcastStream());
         final hasFirstEvent = await events.moveNext().timeout(probeTimeout);
@@ -191,7 +254,12 @@ class AppUpdateService {
         receivedFirstEvent = true;
         final firstResult = await handleEvent(events.current);
         if (firstResult != null) return firstResult;
-        while (await events.moveNext().timeout(downloadTimeout)) {
+        while (elapsed.elapsed < downloadTimeout) {
+          final remaining = downloadTimeout - elapsed.elapsed;
+          final wait = remaining < inactivityTimeout
+              ? remaining
+              : inactivityTimeout;
+          if (!await events.moveNext().timeout(wait)) break;
           final result = await handleEvent(events.current);
           if (result != null) return result;
         }
@@ -200,8 +268,10 @@ class AppUpdateService {
           activeDownloadId,
           filePath,
           downloadTimeout,
+          inactivityTimeout,
           onProgress,
           onDownloaded,
+          onFailure,
         );
       } on TimeoutException {
         if (!receivedFirstEvent) {
@@ -209,22 +279,35 @@ class AppUpdateService {
             activeDownloadId,
             filePath,
             downloadTimeout,
+            inactivityTimeout,
             onProgress,
             onDownloaded,
+            onFailure,
           );
         }
         await _cancelQuietly(activeDownloadId);
+        onFailure?.call(
+          const UpdateFailure(UpdateFailureCode.timedOut, 'APK 下载超时'),
+        );
         return false;
       } finally {
         await events?.cancel();
       }
       await _cancelQuietly(activeDownloadId);
+      onFailure?.call(
+        const UpdateFailure(UpdateFailureCode.downloadFailed, '下载事件流已结束'),
+      );
       return false;
     } catch (error) {
       if (activeDownloadId != null && !completed) {
         await _cancelQuietly(activeDownloadId);
       }
       debugPrint('下载或安装 APK 失败: $error');
+      final code =
+          error is PlatformException && error.code == 'download_in_progress'
+          ? UpdateFailureCode.downloadInProgress
+          : UpdateFailureCode.platform;
+      onFailure?.call(UpdateFailure(code, '下载或安装 APK 失败', cause: error));
       return false;
     }
   }
@@ -233,10 +316,14 @@ class AppUpdateService {
     int downloadId,
     String filePath,
     Duration timeout,
+    Duration inactivityTimeout,
     void Function(double progress)? onProgress,
     void Function(String filePath)? onDownloaded,
+    void Function(UpdateFailure failure)? onFailure,
   ) async {
     final elapsed = Stopwatch()..start();
+    final inactivity = Stopwatch()..start();
+    var lastDownloaded = -1;
     while (elapsed.elapsed < timeout) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
       final progress = await _platform.invokeMapMethod<String, dynamic>(
@@ -244,18 +331,34 @@ class AppUpdateService {
         {'downloadId': downloadId},
       );
       if (progress == null) {
+        onFailure?.call(
+          const UpdateFailure(UpdateFailureCode.platform, '原生下载任务状态不可用'),
+        );
         await _cancelQuietly(downloadId);
         return false;
       }
       final status = progress['status'] as int?;
       final downloaded = progress['bytesDownloaded'] as int? ?? 0;
       final total = progress['totalBytes'] as int? ?? 0;
+      if (downloaded != lastDownloaded) {
+        lastDownloaded = downloaded;
+        inactivity.reset();
+      } else if (inactivity.elapsed >= inactivityTimeout) {
+        onFailure?.call(
+          const UpdateFailure(UpdateFailureCode.timedOut, 'APK 下载长时间无进度'),
+        );
+        await _cancelQuietly(downloadId);
+        return false;
+      }
       if (status == 8) {
         onProgress?.call(1);
         onDownloaded?.call(filePath);
         return openApk(filePath);
       }
       if (status == 16) {
+        onFailure?.call(
+          const UpdateFailure(UpdateFailureCode.downloadFailed, 'APK 下载失败'),
+        );
         await _cancelQuietly(downloadId);
         return false;
       }
@@ -264,6 +367,9 @@ class AppUpdateService {
       );
     }
     await _cancelQuietly(downloadId);
+    onFailure?.call(
+      const UpdateFailure(UpdateFailureCode.timedOut, 'APK 下载超时'),
+    );
     return false;
   }
 

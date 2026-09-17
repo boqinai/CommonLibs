@@ -31,12 +31,11 @@ func WithDatabaseTimeout(timeout time.Duration) Option {
 }
 
 type Server struct {
-	db        *sql.DB
-	store     UserStore
-	secret    []byte
-	dummyHash []byte
-	tokenExpiry time.Duration
-	bcryptCost int
+	store           UserStore
+	secret          []byte
+	dummyHash       []byte
+	tokenExpiry     time.Duration
+	bcryptCost      int
 	databaseTimeout time.Duration
 }
 
@@ -47,9 +46,7 @@ func New(db *sql.DB, jwtSecret []byte, options ...Option) *Server {
 	if len(jwtSecret) == 0 {
 		panic("authserver: empty JWT secret")
 	}
-	server := newWithStore(NewSQLiteUserStore(db), jwtSecret, options...)
-	server.db = db
-	return server
+	return newWithStore(NewSQLiteUserStore(db), jwtSecret, options...)
 }
 
 func NewWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server {
@@ -63,8 +60,22 @@ func NewWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server 
 }
 
 func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server {
-	server := &Server{store: store, secret: append([]byte(nil), jwtSecret...), tokenExpiry: 30 * 24 * time.Hour, bcryptCost: bcrypt.DefaultCost, databaseTimeout: 5 * time.Second}
-	for _, option := range options { option(server) }
+	server := &Server{
+		store:           store,
+		secret:          append([]byte(nil), jwtSecret...),
+		tokenExpiry:     30 * 24 * time.Hour,
+		bcryptCost:      bcrypt.DefaultCost,
+		databaseTimeout: 5 * time.Second,
+	}
+	for _, option := range options {
+		option(server)
+	}
+	if server.tokenExpiry <= 0 {
+		panic("authserver: token expiry must be positive")
+	}
+	if server.databaseTimeout <= 0 {
+		panic("authserver: database timeout must be positive")
+	}
 	dummyHash, err := bcrypt.GenerateFromPassword([]byte("invalid-password"), server.bcryptCost)
 	if err != nil {
 		panic("authserver: invalid bcrypt cost")

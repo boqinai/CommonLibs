@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import logging
 import os
 import re
@@ -23,6 +24,12 @@ class ReleaseArtifact:
     version: str
 
 
+@dataclass(frozen=True)
+class PublishResult:
+    publisher: str
+    detail: str
+
+
 class ProjectInspector:
     def __init__(self, project: Path):
         self.project = project.resolve()
@@ -44,7 +51,9 @@ class FlutterBuilder:
 
 
 class Publisher(Protocol):
-    def publish(self, artifact: ReleaseArtifact) -> None: ...
+    def prepare(self, artifact: ReleaseArtifact) -> None: ...
+
+    def publish(self, artifact: ReleaseArtifact) -> PublishResult: ...
 
 
 class GitHubPublisher:
@@ -52,8 +61,15 @@ class GitHubPublisher:
         self.repo = repo
         self.notes = notes
 
-    def publish(self, artifact: ReleaseArtifact) -> None:
+    def prepare(self, artifact: ReleaseArtifact) -> None:
+        if not self.repo.strip():
+            raise ValueError("GitHub repository must not be empty")
+        if shutil.which("gh") is None:
+            raise FileNotFoundError("gh")
+
+    def publish(self, artifact: ReleaseArtifact) -> PublishResult:
         publish_github(artifact.apk, self.repo, artifact.version, self.notes)
+        return PublishResult("github", self.repo)
 
 
 class UpdateCenterPublisher:
@@ -61,11 +77,22 @@ class UpdateCenterPublisher:
         self.args = args
         self.token = token
 
-    def publish(self, artifact: ReleaseArtifact) -> None:
+    def prepare(self, artifact: ReleaseArtifact) -> None:
+        validate_release_options(self.args)
+        validate_token(self.token)
+        if shutil.which("curl") is None:
+            raise FileNotFoundError("curl")
+
+    def publish(self, artifact: ReleaseArtifact) -> PublishResult:
         command, headers = update_center_request(
-            artifact.apk, artifact.app_name, self.args, self.token
+            artifact.apk,
+            artifact.app_name,
+            self.args,
+            self.token,
+            version=artifact.version,
         )
         subprocess.run(command, input=headers, text=True, check=True)
+        return PublishResult("update_center", self.args.update_center)
 
 
 class ReleasePipeline:
@@ -78,6 +105,7 @@ class ReleasePipeline:
         self.inspector = inspector
         self.builder = builder
         self.publishers = publishers
+        self.results: list[PublishResult] = []
 
     def run(self, apk: Path | None = None, app_name: str | None = None) -> ReleaseArtifact:
         version = self.inspector.version()
@@ -89,7 +117,10 @@ class ReleasePipeline:
             raise FileNotFoundError(artifact_path)
         artifact = ReleaseArtifact(artifact_path, resolved_name, version)
         for publisher in self.publishers:
-            publisher.publish(artifact)
+            publisher.prepare(artifact)
+        self.results = []
+        for publisher in self.publishers:
+            self.results.append(publisher.publish(artifact))
         return artifact
 
 
@@ -162,6 +193,7 @@ def publish_github(apk: Path, repo: str, version: str, notes: str) -> None:
         ["gh", "release", "view", tag, "--repo", repo],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        check=False,
     ).returncode == 0
     if exists:
         command = [
@@ -192,7 +224,12 @@ def publish_github(apk: Path, repo: str, version: str, notes: str) -> None:
 
 
 def update_center_request(
-    apk: Path, app_name: str, args: argparse.Namespace, token: str
+    apk: Path,
+    app_name: str,
+    args: argparse.Namespace,
+    token: str,
+    *,
+    version: str | None = None,
 ) -> tuple[list[str], str]:
     validate_release_options(args)
     endpoint = f"{args.update_center.rstrip('/')}/api/v1/releases"
@@ -225,12 +262,22 @@ def update_center_request(
         "--form-string",
         f"app={app_name}",
     ]
+    token = validate_token(token)
+    idempotency_source = f"{app_name}:{version or apk.name}:{args.channel}"
+    idempotency_key = hashlib.sha256(idempotency_source.encode("utf-8")).hexdigest()
+    return command, (
+        f"Authorization: Bearer {token}\n"
+        f"Idempotency-Key: {idempotency_key}\n"
+    )
+
+
+def validate_token(token: str) -> str:
     if "\r" in token or "\n" in token:
         raise ValueError("UPDATE_CENTER_TOKEN must not contain newlines")
     token = token.strip()
     if not token:
         raise ValueError("UPDATE_CENTER_TOKEN must not be empty")
-    return command, f"Authorization: Bearer {token}\n"
+    return token
 
 
 def parser() -> argparse.ArgumentParser:

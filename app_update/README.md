@@ -48,6 +48,10 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 
 下载完成后可通过 `onDownloaded` 保存 APK 路径，授权返回后调用 `openApk(path)` 直接重试安装。`UpdateDownloadController` 会自动保存 `downloadedFilePath`，其 `retry()` 会优先重新打开已下载文件，不会重复下载。
 
+更新协议可选返回 `sha256`（64 位十六进制）和 `file_size`（字节数）。提供后，原生下载服务会在打开安装器前校验 APK 完整性。插件同一时间只允许一个下载任务；重复启动会返回 `download_in_progress`。`downloadTimeout` 限制总下载时长，`inactivityTimeout` 限制两次进度事件之间允许的最长静默时间。
+
+下载失败时可通过 `onFailure` 获取结构化的 `UpdateFailure`；使用 `UpdateDownloadController` 时，可读取其 `failure` 字段展示具体错误原因。
+
 ## 自动检查与下载控制器
 
 ```dart

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -31,6 +32,25 @@ func TestRejectsOversizedCredentials(t *testing.T) {
 	auth.Register(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRejectsNonPositiveDurations(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, option := range []Option{WithTokenExpiry(0), WithDatabaseTimeout(-time.Second)} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected invalid duration to panic")
+				}
+			}()
+			New(db, []byte("test-secret"), option)
+		}()
 	}
 }
 

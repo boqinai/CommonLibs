@@ -42,6 +42,33 @@ void main() {
     expect(result.update?.forceUpdate, isTrue);
   });
 
+  test('parses optional APK integrity metadata', () {
+    final digest = List.filled(64, 'a').join();
+    final result = AppUpdateService.parseResponse({
+      'update_available': true,
+      'version_name': '1.1.0',
+      'download_url': 'https://example.com/app.apk',
+      'sha256': digest,
+      'file_size': 1024,
+    });
+
+    expect(result.status, UpdateCheckStatus.updateAvailable);
+    expect(result.update?.sha256, digest);
+    expect(result.update?.fileSize, 1024);
+  });
+
+  test('rejects malformed APK integrity metadata', () {
+    expect(
+      AppUpdateService.parseResponse({
+        'update_available': true,
+        'version_name': '1.1.0',
+        'download_url': 'https://example.com/app.apk',
+        'sha256': 'not-a-digest',
+      }).status,
+      UpdateCheckStatus.failed,
+    );
+  });
+
   test('uses the native downloader and opens the downloaded APK', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);

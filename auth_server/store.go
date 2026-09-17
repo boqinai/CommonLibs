@@ -42,7 +42,9 @@ func (s *SQLiteUserStore) Init(ctx context.Context) error {
 func (s *SQLiteUserStore) UserExists(ctx context.Context, phone string) (bool, error) {
 	var exists int
 	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) { return false, nil }
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	return err == nil, err
 }
 

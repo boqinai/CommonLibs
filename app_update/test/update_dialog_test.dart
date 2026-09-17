@@ -133,10 +133,14 @@ class _FakeUpdateService extends AppUpdateService {
     String downloadUrl, {
     required String version,
     Duration downloadTimeout = const Duration(minutes: 30),
+    Duration inactivityTimeout = const Duration(seconds: 30),
     bool wifiOnly = false,
+    String? expectedSha256,
+    int? expectedSize,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
     void Function(String filePath)? onDownloaded,
+    void Function(UpdateFailure failure)? onFailure,
   }) async {
     downloadCalls++;
     onStarted?.call(42);

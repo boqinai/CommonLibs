@@ -8,6 +8,8 @@ void main() {
     versionName: '1.1.0',
     downloadUrl: 'https://example.com/app.apk',
     forceUpdate: false,
+    sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    fileSize: 1024,
   );
 
   test('tracks progress and installed state', () async {
@@ -26,6 +28,8 @@ void main() {
     expect(controller.downloadedFilePath, '/tmp/app.apk');
     expect(controller.state, UpdateDownloadState.installed);
     expect(service.wifiOnly, isTrue);
+    expect(service.expectedSha256, update.sha256);
+    expect(service.expectedSize, update.fileSize);
   });
 
   test('retry opens the downloaded APK without downloading again', () async {
@@ -78,19 +82,27 @@ class _FakeUpdateService extends AppUpdateService {
   int? cancelledId;
   int downloadCalls = 0;
   String? openedPath;
+  String? expectedSha256;
+  int? expectedSize;
 
   @override
   Future<bool> downloadAndInstall(
     String downloadUrl, {
     required String version,
     Duration downloadTimeout = const Duration(minutes: 30),
+    Duration inactivityTimeout = const Duration(seconds: 30),
     bool wifiOnly = false,
+    String? expectedSha256,
+    int? expectedSize,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
     void Function(String filePath)? onDownloaded,
+    void Function(UpdateFailure failure)? onFailure,
   }) async {
     downloadCalls++;
     this.wifiOnly = wifiOnly;
+    this.expectedSha256 = expectedSha256;
+    this.expectedSize = expectedSize;
     onStarted?.call(7);
     onProgress?.call(0.5);
     onDownloaded?.call('/tmp/app.apk');

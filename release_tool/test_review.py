@@ -28,7 +28,8 @@ class ReleaseRegressionTest(unittest.TestCase):
         command, headers = release.update_center_request(
             Path("app.apk"), "Example", args, "secret"
         )
-        self.assertEqual(headers, "Authorization: Bearer secret\n")
+        self.assertIn("Authorization: Bearer secret\n", headers)
+        self.assertIn("Idempotency-Key: ", headers)
         self.assertIn("--form-string", command)
 
 

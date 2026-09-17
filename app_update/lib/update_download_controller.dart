@@ -11,18 +11,21 @@ class UpdateDownloadController extends ChangeNotifier {
     required this.service,
     required this.update,
     this.downloadTimeout = const Duration(minutes: 30),
+    this.inactivityTimeout = const Duration(seconds: 30),
     this.wifiOnly = false,
   });
 
   final AppUpdateService service;
   final AppUpdateInfo update;
   final Duration downloadTimeout;
+  final Duration inactivityTimeout;
   final bool wifiOnly;
 
   UpdateDownloadState state = UpdateDownloadState.idle;
   double? progress;
   int? downloadId;
   String? downloadedFilePath;
+  UpdateFailure? failure;
   int _generation = 0;
   bool _disposed = false;
 
@@ -33,6 +36,7 @@ class UpdateDownloadController extends ChangeNotifier {
     progress = null;
     downloadId = null;
     downloadedFilePath = null;
+    failure = null;
     _notify();
 
     bool installed;
@@ -41,7 +45,10 @@ class UpdateDownloadController extends ChangeNotifier {
         update.downloadUrl,
         version: update.versionName,
         downloadTimeout: downloadTimeout,
+        inactivityTimeout: inactivityTimeout,
         wifiOnly: wifiOnly,
+        expectedSha256: update.sha256,
+        expectedSize: update.fileSize,
         onStarted: (id) {
           if (generation != _generation || _disposed) {
             unawaited(service.cancelDownload(id));
@@ -60,11 +67,22 @@ class UpdateDownloadController extends ChangeNotifier {
           downloadedFilePath = path;
           _notify();
         },
+        onFailure: (value) {
+          if (generation != _generation || _disposed) return;
+          failure = value;
+          _notify();
+        },
       );
     } catch (_) {
       installed = false;
     }
     if (generation != _generation || _disposed) return;
+    if (!installed && failure == null) {
+      failure = const UpdateFailure(
+        UpdateFailureCode.platform,
+        '系统未能打开 APK 安装器',
+      );
+    }
     state = installed
         ? UpdateDownloadState.installed
         : UpdateDownloadState.failed;
@@ -80,8 +98,15 @@ class UpdateDownloadController extends ChangeNotifier {
       return;
     }
     final generation = ++_generation;
+    failure = null;
     final installed = await service.openApk(downloadedFilePath!);
     if (generation != _generation || _disposed) return;
+    if (!installed) {
+      failure = const UpdateFailure(
+        UpdateFailureCode.platform,
+        '系统未能打开 APK 安装器',
+      );
+    }
     state = installed
         ? UpdateDownloadState.installed
         : UpdateDownloadState.failed;

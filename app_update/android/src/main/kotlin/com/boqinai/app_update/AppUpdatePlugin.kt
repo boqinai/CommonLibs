@@ -102,6 +102,8 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         val url = call.argument<String>("url")
         val version = call.argument<String>("version")
         val wifiOnly = call.argument<Boolean>("wifiOnly") == true
+        val expectedSha256 = call.argument<String>("sha256")
+        val expectedSize = call.longArgument("fileSize")
         if (url.isNullOrBlank() || version.isNullOrBlank()) {
             result.error("invalid_args", "URL or version is empty", null)
             return
@@ -112,8 +114,18 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             val safeVersion = version.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val destination = File(directory, "app_update_$safeVersion.apk")
             if (destination.exists()) destination.delete()
-            val id = UpdateDownloadService.enqueue(context, url, version, destination, wifiOnly)
+            val id = UpdateDownloadService.enqueue(
+                context,
+                url,
+                version,
+                destination,
+                wifiOnly,
+                expectedSha256,
+                expectedSize,
+            )
             result.success(mapOf("downloadId" to id, "filePath" to destination.absolutePath))
+        } catch (error: UpdateDownloadService.DownloadInProgressException) {
+            result.error("download_in_progress", error.message, null)
         } catch (error: Exception) {
             result.error("download_failed", error.message, null)
         }

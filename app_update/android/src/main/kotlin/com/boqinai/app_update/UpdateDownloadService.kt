@@ -18,12 +18,15 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 class UpdateDownloadService : Service() {
+    class DownloadInProgressException : IllegalStateException("Another update download is already active")
+
     private val executor = Executors.newSingleThreadExecutor()
     private val cancellations = ConcurrentHashMap<Long, AtomicBoolean>()
 
@@ -58,6 +61,8 @@ class UpdateDownloadService : Service() {
         val version = intent.getStringExtra(EXTRA_VERSION).orEmpty()
         val path = intent.getStringExtra(EXTRA_PATH) ?: return
         val wifiOnly = intent.getBooleanExtra(EXTRA_WIFI_ONLY, false)
+        val expectedSha256 = intent.getStringExtra(EXTRA_SHA256)
+        val expectedSize = intent.getLongExtra(EXTRA_SIZE, -1).takeIf { it >= 0 }
         val cancelled = AtomicBoolean(false)
         cancellations[id] = cancelled
         save(id, STATUS_PENDING, 0, 0)
@@ -71,7 +76,18 @@ class UpdateDownloadService : Service() {
         } else {
             startForeground(notificationId(id), initialNotification)
         }
-        executor.execute { download(id, source, version, File(path), wifiOnly, cancelled) }
+        executor.execute {
+            download(
+                id,
+                source,
+                version,
+                File(path),
+                wifiOnly,
+                cancelled,
+                expectedSha256,
+                expectedSize,
+            )
+        }
     }
 
     private fun download(
@@ -81,6 +97,8 @@ class UpdateDownloadService : Service() {
         destination: File,
         wifiOnly: Boolean,
         cancelled: AtomicBoolean,
+        expectedSha256: String?,
+        expectedSize: Long?,
     ) {
         val partial = File(destination.absolutePath + ".part")
         var connection: HttpURLConnection? = null
@@ -100,7 +118,11 @@ class UpdateDownloadService : Service() {
             }
             check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
             val total = connection.contentLengthLong.coerceAtLeast(0)
+            if (expectedSize != null && total > 0) {
+                check(total == expectedSize) { "APK size mismatch" }
+            }
             var downloaded = 0L
+            val digest = expectedSha256?.let { MessageDigest.getInstance("SHA-256") }
             var lastPublishedAt = 0L
             var lastPercent = -1
             connection.inputStream.use { input ->
@@ -111,6 +133,7 @@ class UpdateDownloadService : Service() {
                         val count = input.read(buffer)
                         if (count < 0) break
                         output.write(buffer, 0, count)
+                        digest?.update(buffer, 0, count)
                         downloaded += count
                         val percent = percentage(downloaded, total)
                         val now = System.currentTimeMillis()
@@ -131,6 +154,13 @@ class UpdateDownloadService : Service() {
                 }
             }
             check(!cancelled.get()) { "cancelled" }
+            if (expectedSize != null) {
+                check(downloaded == expectedSize) { "APK size mismatch" }
+            }
+            if (digest != null) {
+                val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                check(actual.equals(expectedSha256, ignoreCase = true)) { "APK checksum mismatch" }
+            }
             if (destination.exists()) destination.delete()
             if (!partial.renameTo(destination)) {
                 partial.copyTo(destination, overwrite = true)
@@ -150,13 +180,16 @@ class UpdateDownloadService : Service() {
         } finally {
             connection?.disconnect()
             cancellations.remove(id)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_DETACH)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(false)
+            activeDownloadId.compareAndSet(id, NO_ACTIVE_DOWNLOAD)
+            if (cancellations.isEmpty()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(false)
+                }
+                stopSelf()
             }
-            if (cancellations.isEmpty()) stopSelf()
         }
     }
 
@@ -258,6 +291,8 @@ class UpdateDownloadService : Service() {
         private const val EXTRA_VERSION = "version"
         private const val EXTRA_PATH = "path"
         private const val EXTRA_WIFI_ONLY = "wifiOnly"
+        private const val EXTRA_SHA256 = "sha256"
+        private const val EXTRA_SIZE = "size"
         private const val CHANNEL_ID = "app_update_downloads"
         private const val PREFERENCES = "app_update_downloads"
         private const val NOTIFICATION_ICON_METADATA = "com.boqinai.app_update.notification_icon"
@@ -266,6 +301,8 @@ class UpdateDownloadService : Service() {
         private const val STATUS_SUCCESSFUL = 8
         private const val STATUS_FAILED = 16
         private val nextId = AtomicLong(System.currentTimeMillis())
+        private const val NO_ACTIVE_DOWNLOAD = -1L
+        private val activeDownloadId = AtomicLong(NO_ACTIVE_DOWNLOAD)
         private val states = ConcurrentHashMap<Long, Map<String, Any>>()
 
         fun enqueue(
@@ -274,22 +311,34 @@ class UpdateDownloadService : Service() {
             version: String,
             destination: File,
             wifiOnly: Boolean,
+            expectedSha256: String?,
+            expectedSize: Long?,
         ): Long {
             val id = nextId.incrementAndGet()
+            if (!activeDownloadId.compareAndSet(NO_ACTIVE_DOWNLOAD, id)) {
+                throw DownloadInProgressException()
+            }
             states.clear()
             DownloadEventBus.clear()
             context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().clear().commit()
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, UpdateDownloadService::class.java).apply {
-                    action = ACTION_DOWNLOAD
-                    putExtra(EXTRA_ID, id)
-                    putExtra(EXTRA_URL, url)
-                    putExtra(EXTRA_VERSION, version)
-                    putExtra(EXTRA_PATH, destination.absolutePath)
-                    putExtra(EXTRA_WIFI_ONLY, wifiOnly)
-                },
-            )
+            try {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, UpdateDownloadService::class.java).apply {
+                        action = ACTION_DOWNLOAD
+                        putExtra(EXTRA_ID, id)
+                        putExtra(EXTRA_URL, url)
+                        putExtra(EXTRA_VERSION, version)
+                        putExtra(EXTRA_PATH, destination.absolutePath)
+                        putExtra(EXTRA_WIFI_ONLY, wifiOnly)
+                        putExtra(EXTRA_SHA256, expectedSha256)
+                        if (expectedSize != null) putExtra(EXTRA_SIZE, expectedSize)
+                    },
+                )
+            } catch (error: Exception) {
+                activeDownloadId.compareAndSet(id, NO_ACTIVE_DOWNLOAD)
+                throw error
+            }
             return id
         }
 
@@ -317,5 +366,6 @@ class UpdateDownloadService : Service() {
             if (total <= 0) 0 else ((downloaded * 100) / total).coerceIn(0, 100).toInt()
 
         private fun notificationId(id: Long) = (id xor (id ushr 32)).toInt() and 0x7fffffff
+
     }
 }

@@ -153,6 +153,7 @@ class AuthClient {
   final StreamController<bool> _authStateController =
       StreamController<bool>.broadcast();
   Future<String?>? _activeRefresh;
+  int _authGeneration = 0;
   String? _token;
 
   String? get token => _token;
@@ -184,12 +185,14 @@ class AuthClient {
       );
     }
     await _tokenStore.write(token);
+    _authGeneration++;
     _token = token;
     _authStateController.add(true);
     return token;
   }
 
   Future<String?> restore({bool validate = false}) async {
+    _authGeneration++;
     _token = await _tokenStore.read();
     _authStateController.add(isLoggedIn);
     if (!isLoggedIn || !validate) return _token;
@@ -237,6 +240,7 @@ class AuthClient {
   }
 
   Future<void> logout() async {
+    _authGeneration++;
     _token = null;
     await _tokenStore.clear();
     _authStateController.add(false);
@@ -254,6 +258,10 @@ class AuthClient {
     bool authenticated = false,
     bool allowRefresh = true,
   }) async {
+    const supportedMethods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'};
+    if (!supportedMethods.contains(method)) {
+      throw ArgumentError.value(method, 'method', 'unsupported HTTP method');
+    }
     if (authenticated && !isLoggedIn) {
       throw const AuthException(
         '未登录',
@@ -299,6 +307,7 @@ class AuthClient {
             response.statusCode == 401 &&
             allowRefresh &&
             onRefreshToken != null) {
+          final generation = _authGeneration;
           final refresh = _activeRefresh ??= Future<String?>.sync(
             onRefreshToken!,
           );
@@ -307,6 +316,13 @@ class AuthClient {
             refreshed = await refresh;
           } finally {
             if (identical(_activeRefresh, refresh)) _activeRefresh = null;
+          }
+          if (generation != _authGeneration) {
+            throw const AuthException(
+              '认证状态已发生变化',
+              code: AuthErrorCode.unauthorized,
+              statusCode: 401,
+            );
           }
           if (refreshed != null && refreshed.isNotEmpty) {
             _token = refreshed;

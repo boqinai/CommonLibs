@@ -1,5 +1,7 @@
 # release_tool
 
+发布前会先验证全部 Publisher 的依赖与配置，避免某个目标尚未就绪时提前发布到其他目标。更新中心请求携带基于应用、版本和渠道生成的 `Idempotency-Key`，服务端可据此安全处理重复执行。
+
 统一构建和发布 Flutter Android APK，无第三方 Python 依赖。
 
 ```bash
