@@ -71,3 +71,11 @@ await controller.start(); // retry() / cancel()
 调度模块只持久化最后检查时间；是否启用、频率选择和界面文案仍由 App 决定。`wifiOnly: true` 会在非 Wi-Fi 网络下保持等待，恢复 Wi-Fi 后自动开始下载。Android 13+ 首次下载时插件会请求通知权限。
 
 远程更新接口和 APK 地址必须使用 HTTPS；仅 `localhost`、`127.0.0.1` 和 `::1` 可使用 HTTP。界面销毁时调用 `controller.dispose()`，控制器会取消仍在运行的下载。
+
+如需自定义通知小图标，在 App 的 `<application>` 中配置单色 drawable：
+
+```xml
+<meta-data
+    android:name="com.boqinai.app_update.notification_icon"
+    android:resource="@drawable/ic_stat_update" />
+```

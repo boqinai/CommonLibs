@@ -116,6 +116,37 @@ void main() {
     },
   );
 
+  test('concurrent 401 responses share one token refresh', () async {
+    await store.write('expired');
+    var refreshCalls = 0;
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      onRefreshToken: () async {
+        refreshCalls++;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        return 'fresh';
+      },
+      client: MockClient(
+        (request) async => request.headers['Authorization'] == 'Bearer fresh'
+            ? http.Response('{"ok":true}', 200)
+            : http.Response('{}', 401),
+      ),
+    );
+    addTearDown(client.close);
+    await client.restore();
+
+    final results = await Future.wait([
+      client.authenticatedRequest('GET', '/api/one'),
+      client.authenticatedRequest('GET', '/api/two'),
+      client.authenticatedRequest('GET', '/api/three'),
+    ]);
+
+    expect(refreshCalls, 1);
+    expect(results, everyElement({'ok': true}));
+    expect(await store.read(), 'fresh');
+  });
+
   test('close releases the HTTP client', () {
     final transport = _TrackingClient();
     final client = AuthClient(

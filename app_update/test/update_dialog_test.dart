@@ -81,6 +81,46 @@ void main() {
     expect(find.text('发现新版本'), findsNothing);
     expect(service.downloadCalls, 1);
   });
+  testWidgets('long release notes remain scrollable on a small screen', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 480));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _FakeUpdateService();
+    addTearDown(service.close);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.8)),
+          child: child!,
+        ),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDefaultUpdateDialog(
+              context,
+              service: service,
+              update: AppUpdateInfo(
+                versionName: '2.0.0',
+                downloadUrl: 'https://example.com/app.apk',
+                forceUpdate: false,
+                releaseNotes: List.filled(30, '一项很长的更新说明').join('\n'),
+              ),
+            ),
+            child: const Text('show'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('show'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SingleChildScrollView), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _FakeUpdateService extends AppUpdateService {

@@ -1,3 +1,7 @@
+## 0.9.0
+
+- Coalesce concurrent token refresh attempts so parallel 401 responses reuse one refresh operation.
+
 ## 0.8.0
 
 - Add authentication state events, dynamic header injection, typed response decoding, and token refresh hooks.

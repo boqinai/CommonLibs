@@ -1,3 +1,8 @@
+## 0.6.0
+
+- Stream native download progress through EventChannel, with polling fallback for older plugin builds.
+- Allow apps to configure a dedicated monochrome notification icon through manifest metadata.
+
 ## 0.5.0
 
 - Add a reusable Material update dialog with release notes, forced-update handling, and a background-download action.

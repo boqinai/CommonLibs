@@ -169,7 +169,7 @@ class UpdateDownloadService : Service() {
     ): Notification {
         val active = text.startsWith("正在") || text.startsWith("等待") || text.startsWith("准备")
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(if (active) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_download_done)
+            .setSmallIcon(notificationIcon(active))
             .setContentTitle("${applicationInfo.loadLabel(packageManager)} 更新 v$version")
             .setContentText(text)
             .setOnlyAlertOnce(true)
@@ -193,6 +193,17 @@ class UpdateDownloadService : Service() {
         )
     }
 
+    private fun notificationIcon(active: Boolean): Int {
+        val metadata = packageManager.getApplicationInfo(
+            packageName,
+            android.content.pm.PackageManager.GET_META_DATA,
+        ).metaData
+        val configured = metadata?.getInt(NOTIFICATION_ICON_METADATA, 0) ?: 0
+        return configured.takeIf { it != 0 }
+            ?: if (active) android.R.drawable.stat_sys_download
+            else android.R.drawable.stat_sys_download_done
+    }
+
     private fun hasWifi(): Boolean {
         val manager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = manager.activeNetwork ?: return false
@@ -213,15 +224,26 @@ class UpdateDownloadService : Service() {
         get() = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
     private fun save(id: Long, status: Int, downloaded: Long, total: Long) {
-        preferences.edit()
-            .putBoolean("$id.exists", true)
-            .putInt("$id.status", status)
-            .putLong("$id.downloaded", downloaded)
-            .putLong("$id.total", total)
-            .apply()
+        val event = mapOf<String, Any>(
+            "downloadId" to id,
+            "status" to status,
+            "bytesDownloaded" to downloaded,
+            "totalBytes" to total,
+        )
+        states[id] = event
+        if (status == STATUS_SUCCESSFUL || status == STATUS_FAILED) {
+            preferences.edit()
+                .putBoolean("$id.exists", true)
+                .putInt("$id.status", status)
+                .putLong("$id.downloaded", downloaded)
+                .putLong("$id.total", total)
+                .apply()
+        }
+        DownloadEventBus.publish(event)
     }
 
     private fun clear(id: Long) {
+        states.remove(id)
         preferences.edit().remove("$id.exists").remove("$id.status")
             .remove("$id.downloaded").remove("$id.total").apply()
     }
@@ -238,11 +260,13 @@ class UpdateDownloadService : Service() {
         private const val EXTRA_WIFI_ONLY = "wifiOnly"
         private const val CHANNEL_ID = "app_update_downloads"
         private const val PREFERENCES = "app_update_downloads"
+        private const val NOTIFICATION_ICON_METADATA = "com.boqinai.app_update.notification_icon"
         private const val STATUS_PENDING = 1
         private const val STATUS_RUNNING = 2
         private const val STATUS_SUCCESSFUL = 8
         private const val STATUS_FAILED = 16
         private val nextId = AtomicLong(System.currentTimeMillis())
+        private val states = ConcurrentHashMap<Long, Map<String, Any>>()
 
         fun enqueue(
             context: Context,
@@ -252,6 +276,8 @@ class UpdateDownloadService : Service() {
             wifiOnly: Boolean,
         ): Long {
             val id = nextId.incrementAndGet()
+            states.clear()
+            DownloadEventBus.clear()
             context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().clear().commit()
             ContextCompat.startForegroundService(
                 context,
@@ -268,6 +294,7 @@ class UpdateDownloadService : Service() {
         }
 
         fun progress(context: Context, id: Long): Map<String, Any>? {
+            states[id]?.let { return it }
             val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             if (!preferences.getBoolean("$id.exists", false)) return null
             return mapOf(

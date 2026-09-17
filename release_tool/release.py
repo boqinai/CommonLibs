@@ -6,12 +6,91 @@ import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlparse
 
 UPDATE_CENTER = "https://api.boqinai.com/updatecenter"
 APK_MIME = "application/vnd.android.package-archive"
 LOGGER = logging.getLogger("release_tool")
+
+
+@dataclass(frozen=True)
+class ReleaseArtifact:
+    apk: Path
+    app_name: str
+    version: str
+
+
+class ProjectInspector:
+    def __init__(self, project: Path):
+        self.project = project.resolve()
+
+    def version(self) -> str:
+        return read_version(self.project)
+
+    def app_name(self) -> str:
+        return read_app_name(self.project)
+
+
+class Builder(Protocol):
+    def build(self, project: Path, app_name: str, version: str) -> Path: ...
+
+
+class FlutterBuilder:
+    def build(self, project: Path, app_name: str, version: str) -> Path:
+        return build_apk(project, app_name, version)
+
+
+class Publisher(Protocol):
+    def publish(self, artifact: ReleaseArtifact) -> None: ...
+
+
+class GitHubPublisher:
+    def __init__(self, repo: str, notes: str):
+        self.repo = repo
+        self.notes = notes
+
+    def publish(self, artifact: ReleaseArtifact) -> None:
+        publish_github(artifact.apk, self.repo, artifact.version, self.notes)
+
+
+class UpdateCenterPublisher:
+    def __init__(self, args: argparse.Namespace, token: str):
+        self.args = args
+        self.token = token
+
+    def publish(self, artifact: ReleaseArtifact) -> None:
+        command, headers = update_center_request(
+            artifact.apk, artifact.app_name, self.args, self.token
+        )
+        subprocess.run(command, input=headers, text=True, check=True)
+
+
+class ReleasePipeline:
+    def __init__(
+        self,
+        inspector: ProjectInspector,
+        builder: Builder,
+        publishers: list[Publisher],
+    ):
+        self.inspector = inspector
+        self.builder = builder
+        self.publishers = publishers
+
+    def run(self, apk: Path | None = None, app_name: str | None = None) -> ReleaseArtifact:
+        version = self.inspector.version()
+        resolved_name = app_name or self.inspector.app_name()
+        artifact_path = apk or self.builder.build(
+            self.inspector.project, resolved_name, version
+        )
+        if not artifact_path.is_file():
+            raise FileNotFoundError(artifact_path)
+        artifact = ReleaseArtifact(artifact_path, resolved_name, version)
+        for publisher in self.publishers:
+            publisher.publish(artifact)
+        return artifact
 
 
 def validate_release_options(args: argparse.Namespace) -> None:
@@ -181,22 +260,24 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
     )
-    project = Path(args.project).resolve()
-    version = read_version(project)
-    app_name = args.app_name or read_app_name(project)
-    apk = Path(args.apk).resolve() if args.apk else build_apk(project, app_name, version)
-    if not apk.is_file():
-        raise FileNotFoundError(apk)
-
     token = os.environ.get("UPDATE_CENTER_TOKEN")
     if not args.repo and (args.no_update_center or not token):
         parser().error("provide --repo or UPDATE_CENTER_TOKEN")
+    publishers: list[Publisher] = []
     if args.repo:
-        publish_github(apk, args.repo, version, args.notes)
+        publishers.append(GitHubPublisher(args.repo, args.notes))
     if token and not args.no_update_center:
-        command, headers = update_center_request(apk, app_name, args, token)
-        subprocess.run(command, input=headers, text=True, check=True)
-    LOGGER.info("Published %s (%s)", apk.name, version)
+        publishers.append(UpdateCenterPublisher(args, token))
+    pipeline = ReleasePipeline(
+        ProjectInspector(Path(args.project).resolve()),
+        FlutterBuilder(),
+        publishers,
+    )
+    artifact = pipeline.run(
+        Path(args.apk).resolve() if args.apk else None,
+        args.app_name,
+    )
+    LOGGER.info("Published %s (%s)", artifact.apk.name, artifact.version)
     return 0
 
 

@@ -57,6 +57,7 @@ class AppUpdateService {
        _requestContextLoader = requestContextLoader;
 
   static const _platform = MethodChannel('app_update');
+  static const _events = EventChannel('app_update/events');
 
   final String updateApiUrl;
   final String channel;
@@ -157,32 +158,65 @@ class AppUpdateService {
       }
       onStarted?.call(activeDownloadId);
 
-      final elapsed = Stopwatch()..start();
-      while (elapsed.elapsed < downloadTimeout) {
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-        final progress = await _platform.invokeMapMethod<String, dynamic>(
-          'getDownloadProgress',
-          {'downloadId': activeDownloadId},
-        );
-        if (progress == null) {
-          await _cancelQuietly(activeDownloadId);
-          return false;
-        }
-        final status = progress['status'] as int?;
-        final downloaded = progress['bytesDownloaded'] as int? ?? 0;
-        final total = progress['totalBytes'] as int? ?? 0;
+      Future<bool?> handleEvent(dynamic raw) async {
+        if (raw is! Map || raw['downloadId'] != activeDownloadId) return null;
+        final status = raw['status'] as int?;
+        final downloaded = raw['bytesDownloaded'] as int? ?? 0;
+        final total = raw['totalBytes'] as int? ?? 0;
         if (status == 8) {
           completed = true;
           onProgress?.call(1);
           onDownloaded?.call(filePath);
           return await openApk(filePath);
         }
-        if (status == 16) {
+        if (status == 16) return false;
+        onProgress?.call(
+          (total > 0 ? downloaded / total : 0.0).clamp(0.0, 1.0).toDouble(),
+        );
+        return null;
+      }
+
+      final probeTimeout = downloadTimeout < const Duration(seconds: 1)
+          ? downloadTimeout
+          : const Duration(seconds: 1);
+      StreamIterator<dynamic>? events;
+      var receivedFirstEvent = false;
+      try {
+        events = StreamIterator<dynamic>(_events.receiveBroadcastStream());
+        final hasFirstEvent = await events.moveNext().timeout(probeTimeout);
+        if (!hasFirstEvent) {
           await _cancelQuietly(activeDownloadId);
           return false;
         }
-        final value = total > 0 ? downloaded / total : 0.0;
-        onProgress?.call(value.clamp(0.0, 1.0).toDouble());
+        receivedFirstEvent = true;
+        final firstResult = await handleEvent(events.current);
+        if (firstResult != null) return firstResult;
+        while (await events.moveNext().timeout(downloadTimeout)) {
+          final result = await handleEvent(events.current);
+          if (result != null) return result;
+        }
+      } on MissingPluginException {
+        return await _pollDownload(
+          activeDownloadId,
+          filePath,
+          downloadTimeout,
+          onProgress,
+          onDownloaded,
+        );
+      } on TimeoutException {
+        if (!receivedFirstEvent) {
+          return await _pollDownload(
+            activeDownloadId,
+            filePath,
+            downloadTimeout,
+            onProgress,
+            onDownloaded,
+          );
+        }
+        await _cancelQuietly(activeDownloadId);
+        return false;
+      } finally {
+        await events?.cancel();
       }
       await _cancelQuietly(activeDownloadId);
       return false;
@@ -193,6 +227,44 @@ class AppUpdateService {
       debugPrint('下载或安装 APK 失败: $error');
       return false;
     }
+  }
+
+  Future<bool> _pollDownload(
+    int downloadId,
+    String filePath,
+    Duration timeout,
+    void Function(double progress)? onProgress,
+    void Function(String filePath)? onDownloaded,
+  ) async {
+    final elapsed = Stopwatch()..start();
+    while (elapsed.elapsed < timeout) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final progress = await _platform.invokeMapMethod<String, dynamic>(
+        'getDownloadProgress',
+        {'downloadId': downloadId},
+      );
+      if (progress == null) {
+        await _cancelQuietly(downloadId);
+        return false;
+      }
+      final status = progress['status'] as int?;
+      final downloaded = progress['bytesDownloaded'] as int? ?? 0;
+      final total = progress['totalBytes'] as int? ?? 0;
+      if (status == 8) {
+        onProgress?.call(1);
+        onDownloaded?.call(filePath);
+        return openApk(filePath);
+      }
+      if (status == 16) {
+        await _cancelQuietly(downloadId);
+        return false;
+      }
+      onProgress?.call(
+        (total > 0 ? downloaded / total : 0.0).clamp(0.0, 1.0).toDouble(),
+      );
+    }
+    await _cancelQuietly(downloadId);
+    return false;
   }
 
   /// 打开已下载的 APK。可在用户授予“安装未知应用”权限后直接重试安装。

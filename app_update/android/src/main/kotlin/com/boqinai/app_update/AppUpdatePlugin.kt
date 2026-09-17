@@ -18,6 +18,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.PluginRegistry
 import java.io.File
 
@@ -25,6 +26,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     PluginRegistry.RequestPermissionsResultListener {
     private lateinit var context: Context
     private lateinit var channel: MethodChannel
+    private lateinit var eventChannel: EventChannel
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var pendingDownload: Pair<MethodCall, MethodChannel.Result>? = null
@@ -33,6 +35,8 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, "app_update")
         channel.setMethodCallHandler(this)
+        eventChannel = EventChannel(binding.binaryMessenger, "app_update/events")
+        eventChannel.setStreamHandler(DownloadEventBus)
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -247,6 +251,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             "Flutter engine was detached before notification permission result",
         )
         channel.setMethodCallHandler(null)
+        eventChannel.setStreamHandler(null)
     }
 
     private fun failPendingDownload(code: String, message: String) {

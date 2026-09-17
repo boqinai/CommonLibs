@@ -32,6 +32,7 @@ func WithDatabaseTimeout(timeout time.Duration) Option {
 
 type Server struct {
 	db        *sql.DB
+	store     UserStore
 	secret    []byte
 	dummyHash []byte
 	tokenExpiry time.Duration
@@ -46,10 +47,28 @@ func New(db *sql.DB, jwtSecret []byte, options ...Option) *Server {
 	if len(jwtSecret) == 0 {
 		panic("authserver: empty JWT secret")
 	}
-	server := &Server{db: db, secret: append([]byte(nil), jwtSecret...), tokenExpiry: 30 * 24 * time.Hour, bcryptCost: bcrypt.DefaultCost, databaseTimeout: 5 * time.Second}
+	server := newWithStore(NewSQLiteUserStore(db), jwtSecret, options...)
+	server.db = db
+	return server
+}
+
+func NewWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server {
+	if store == nil {
+		panic("authserver: nil user store")
+	}
+	if len(jwtSecret) == 0 {
+		panic("authserver: empty JWT secret")
+	}
+	return newWithStore(store, jwtSecret, options...)
+}
+
+func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server {
+	server := &Server{store: store, secret: append([]byte(nil), jwtSecret...), tokenExpiry: 30 * 24 * time.Hour, bcryptCost: bcrypt.DefaultCost, databaseTimeout: 5 * time.Second}
 	for _, option := range options { option(server) }
 	dummyHash, err := bcrypt.GenerateFromPassword([]byte("invalid-password"), server.bcryptCost)
-	if err != nil { panic("authserver: invalid bcrypt cost") }
+	if err != nil {
+		panic("authserver: invalid bcrypt cost")
+	}
 	server.dummyHash = dummyHash
 	return server
 }
@@ -59,15 +78,7 @@ func (s *Server) dbContext(parent context.Context) (context.Context, context.Can
 }
 
 func (s *Server) Init(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;
-	PRAGMA busy_timeout=5000;
-	CREATE TABLE IF NOT EXISTS users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		phone TEXT UNIQUE NOT NULL,
-		password_hash TEXT NOT NULL,
-		created_at INTEGER NOT NULL
-	)`)
-	return err
+	return s.store.Init(ctx)
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -85,16 +96,15 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var exists int
 	ctx, cancel := s.dbContext(r.Context())
 	defer cancel()
-	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists)
-	if err == nil {
-		writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
+	exists, err := s.store.UserExists(ctx, phone)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
 		return
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
+	if exists {
+		writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
@@ -102,15 +112,9 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "password hashing failed")
 		return
 	}
-	_, err = s.db.ExecContext(
-		ctx,
-		"INSERT INTO users(phone,password_hash,created_at) VALUES(?,?,?)",
-		phone,
-		string(hash),
-		time.Now().UnixMilli(),
-	)
+	_, err = s.store.CreateUser(ctx, phone, string(hash))
 	if err != nil {
-		if s.db.QueryRowContext(ctx, "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists) == nil {
+		if exists, _ := s.store.UserExists(ctx, phone); exists {
 			writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
 			return
 		}
@@ -129,29 +133,24 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var id int64
-	var hash string
 	ctx, cancel := s.dbContext(r.Context())
 	defer cancel()
-	err := s.db.QueryRowContext(
-		ctx,
-		"SELECT id,password_hash FROM users WHERE phone=?",
-		phone,
-	).Scan(&id, &hash)
-	if errors.Is(err, sql.ErrNoRows) {
-		hash = string(s.dummyHash)
+	user, err := s.store.GetUserByPhone(ctx, phone)
+	hash := string(s.dummyHash)
+	if err == nil {
+		hash = user.PasswordHash
 	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "login failed")
 		return
 	}
 	passwordError := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	if errors.Is(err, sql.ErrNoRows) || passwordError != nil {
+	if errors.Is(err, ErrUserNotFound) || passwordError != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid phone or password")
 		return
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": strconv.FormatInt(id, 10),
+		"sub": strconv.FormatInt(user.ID, 10),
 		"exp": time.Now().Add(s.tokenExpiry).Unix(),
 	})
 	signed, err := token.SignedString(s.secret)
@@ -172,14 +171,18 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	var phone string
 	ctx, cancel := s.dbContext(r.Context())
 	defer cancel()
-	if err := s.db.QueryRowContext(ctx, "SELECT phone FROM users WHERE id=?", id).Scan(&phone); err != nil {
+	user, err := s.store.GetUserByID(ctx, id)
+	if errors.Is(err, ErrUserNotFound) {
 		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "phone": phone})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "phone": user.Phone})
 }
 
 func (s *Server) RequireAuth(next http.Handler) http.Handler {

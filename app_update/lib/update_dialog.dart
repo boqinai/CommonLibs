@@ -88,6 +88,7 @@ class _DefaultUpdateDialogState extends State<_DefaultUpdateDialog> {
     return PopScope(
       canPop: _allowPop || !widget.update.forceUpdate,
       child: AlertDialog(
+        scrollable: true,
         icon: DecoratedBox(
           decoration: BoxDecoration(
             color: colors.primaryContainer,

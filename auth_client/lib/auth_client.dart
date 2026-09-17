@@ -152,6 +152,7 @@ class AuthClient {
   final AuthTokenRefresher? onRefreshToken;
   final StreamController<bool> _authStateController =
       StreamController<bool>.broadcast();
+  Future<String?>? _activeRefresh;
   String? _token;
 
   String? get token => _token;
@@ -298,7 +299,15 @@ class AuthClient {
             response.statusCode == 401 &&
             allowRefresh &&
             onRefreshToken != null) {
-          final refreshed = await onRefreshToken!();
+          final refresh = _activeRefresh ??= Future<String?>.sync(
+            onRefreshToken!,
+          );
+          String? refreshed;
+          try {
+            refreshed = await refresh;
+          } finally {
+            if (identical(_activeRefresh, refresh)) _activeRefresh = null;
+          }
           if (refreshed != null && refreshed.isNotEmpty) {
             _token = refreshed;
             await _tokenStore.write(refreshed);
