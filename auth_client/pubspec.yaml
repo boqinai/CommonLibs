@@ -1,6 +1,6 @@
 name: auth_client
 description: Shared phone/password authentication client for Boqinai Flutter apps.
-version: 0.9.0
+version: 0.10.0
 publish_to: none
 
 environment:
@@ -18,4 +18,3 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-

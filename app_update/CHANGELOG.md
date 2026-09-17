@@ -1,8 +1,12 @@
+## 0.7.0
+
+- Verify APK SHA-256 integrity and file size before opening the installer.
+- Guard against concurrent foreground download services and support typed UpdateFailure reporting.
+- Add inactivity timeout alongside overall download timeout.
+
 ## 0.6.0
 
 - Stream native download progress through EventChannel, with polling fallback for older plugin builds.
-- Verify APK SHA-256 integrity and file size before opening the installer.
-- Guard against concurrent foreground download services and support typed UpdateFailure reporting.
 - Allow apps to configure a dedicated monochrome notification icon through manifest metadata.
 
 ## 0.5.0

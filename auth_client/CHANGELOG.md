@@ -1,7 +1,11 @@
+## 0.10.0
+
+- Invalidate in-flight token refresh completions if logout occurs concurrently.
+- Validate HTTP methods against supported verbs upfront.
+
 ## 0.9.0
 
 - Coalesce concurrent token refresh attempts so parallel 401 responses reuse one refresh operation.
-- Invalidate in-flight token refresh completions if logout occurs concurrently.
 
 ## 0.8.0
 
