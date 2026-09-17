@@ -2,6 +2,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum UpdateCheckFrequency { launch, daily, weekly }
 
+abstract interface class UpdateCheckPolicy {
+  bool isDue(DateTime now, DateTime? lastChecked);
+}
+
+class IntervalUpdateCheckPolicy implements UpdateCheckPolicy {
+  const IntervalUpdateCheckPolicy(this.interval);
+  final Duration interval;
+
+  @override
+  bool isDue(DateTime now, DateTime? lastChecked) =>
+      lastChecked == null || now.difference(lastChecked) >= interval;
+}
+
 class UpdateCheckSchedule {
   UpdateCheckSchedule({DateTime Function()? now}) : _now = now ?? DateTime.now;
 
@@ -24,6 +37,16 @@ class UpdateCheckSchedule {
               7;
     }
     return preferences.getString(_lastDateKey) != _dateKey(_now());
+  }
+
+  Future<bool> isDueFor(UpdateCheckPolicy policy, {bool enabled = true}) async {
+    if (!enabled) return false;
+    final preferences = await SharedPreferences.getInstance();
+    final last = preferences.getInt(_lastTimeKey);
+    return policy.isDue(
+      _now(),
+      last == null ? null : DateTime.fromMillisecondsSinceEpoch(last),
+    );
   }
 
   Future<void> markChecked() async {

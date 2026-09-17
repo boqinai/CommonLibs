@@ -17,21 +17,45 @@ import (
 
 type userContextKey struct{}
 
+var (
+	ErrMissingBearerToken = errors.New("authserver: missing bearer token")
+	ErrInvalidToken       = errors.New("authserver: invalid token")
+)
+
+type Option func(*Server)
+
+func WithTokenExpiry(expiry time.Duration) Option { return func(s *Server) { s.tokenExpiry = expiry } }
+func WithBcryptCost(cost int) Option               { return func(s *Server) { s.bcryptCost = cost } }
+func WithDatabaseTimeout(timeout time.Duration) Option {
+	return func(s *Server) { s.databaseTimeout = timeout }
+}
+
 type Server struct {
 	db        *sql.DB
 	secret    []byte
 	dummyHash []byte
+	tokenExpiry time.Duration
+	bcryptCost int
+	databaseTimeout time.Duration
 }
 
-func New(db *sql.DB, jwtSecret []byte) *Server {
+func New(db *sql.DB, jwtSecret []byte, options ...Option) *Server {
 	if db == nil {
 		panic("authserver: nil database")
 	}
 	if len(jwtSecret) == 0 {
 		panic("authserver: empty JWT secret")
 	}
-	dummyHash, _ := bcrypt.GenerateFromPassword([]byte("invalid-password"), bcrypt.DefaultCost)
-	return &Server{db: db, secret: append([]byte(nil), jwtSecret...), dummyHash: dummyHash}
+	server := &Server{db: db, secret: append([]byte(nil), jwtSecret...), tokenExpiry: 30 * 24 * time.Hour, bcryptCost: bcrypt.DefaultCost, databaseTimeout: 5 * time.Second}
+	for _, option := range options { option(server) }
+	dummyHash, err := bcrypt.GenerateFromPassword([]byte("invalid-password"), server.bcryptCost)
+	if err != nil { panic("authserver: invalid bcrypt cost") }
+	server.dummyHash = dummyHash
+	return server
+}
+
+func (s *Server) dbContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, s.databaseTimeout)
 }
 
 func (s *Server) Init(ctx context.Context) error {
@@ -62,7 +86,9 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var exists int
-	err := s.db.QueryRowContext(r.Context(), "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists)
+	ctx, cancel := s.dbContext(r.Context())
+	defer cancel()
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists)
 	if err == nil {
 		writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
 		return
@@ -71,20 +97,20 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "password hashing failed")
 		return
 	}
 	_, err = s.db.ExecContext(
-		r.Context(),
+		ctx,
 		"INSERT INTO users(phone,password_hash,created_at) VALUES(?,?,?)",
 		phone,
 		string(hash),
 		time.Now().UnixMilli(),
 	)
 	if err != nil {
-		if s.db.QueryRowContext(r.Context(), "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists) == nil {
+		if s.db.QueryRowContext(ctx, "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists) == nil {
 			writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
 			return
 		}
@@ -105,8 +131,10 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	var id int64
 	var hash string
+	ctx, cancel := s.dbContext(r.Context())
+	defer cancel()
 	err := s.db.QueryRowContext(
-		r.Context(),
+		ctx,
 		"SELECT id,password_hash FROM users WHERE phone=?",
 		phone,
 	).Scan(&id, &hash)
@@ -124,7 +152,7 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": strconv.FormatInt(id, 10),
-		"exp": time.Now().Add(30 * 24 * time.Hour).Unix(),
+		"exp": time.Now().Add(s.tokenExpiry).Unix(),
 	})
 	signed, err := token.SignedString(s.secret)
 	if err != nil {
@@ -145,7 +173,9 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var phone string
-	if err := s.db.QueryRowContext(r.Context(), "SELECT phone FROM users WHERE id=?", id).Scan(&phone); err != nil {
+	ctx, cancel := s.dbContext(r.Context())
+	defer cancel()
+	if err := s.db.QueryRowContext(ctx, "SELECT phone FROM users WHERE id=?", id).Scan(&phone); err != nil {
 		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
 		return
 	}
@@ -171,7 +201,7 @@ func UserID(r *http.Request) (int64, bool) {
 func (s *Server) authenticate(header string) (int64, error) {
 	scheme, tokenText, found := strings.Cut(header, " ")
 	if !found || !strings.EqualFold(scheme, "Bearer") {
-		return 0, errors.New("missing bearer token")
+		return 0, ErrMissingBearerToken
 	}
 	token, err := jwt.Parse(
 		strings.TrimSpace(tokenText),
@@ -179,7 +209,7 @@ func (s *Server) authenticate(header string) (int64, error) {
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 	)
 	if err != nil || !token.Valid {
-		return 0, errors.New("invalid token")
+		return 0, ErrInvalidToken
 	}
 	subject, err := token.Claims.GetSubject()
 	if err != nil {

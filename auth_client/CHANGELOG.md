@@ -1,3 +1,8 @@
+## 0.8.0
+
+- Add authentication state events, dynamic header injection, typed response decoding, and token refresh hooks.
+- Improve exception diagnostics and reuse compiled regular expressions.
+
 ## 0.7.0
 
 - Add PATCH support and normalize relative request paths.

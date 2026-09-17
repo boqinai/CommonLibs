@@ -6,6 +6,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+final _unsafeFileNameCharacters = RegExp(r'[^A-Za-z0-9._-]');
+final _trailingSlashes = RegExp(r'/+$');
+
 class AuthException implements Exception {
   const AuthException(
     this.message, {
@@ -20,8 +23,12 @@ class AuthException implements Exception {
   final bool isNetworkFailure;
 
   @override
-  String toString() => message;
+  String toString() =>
+      'AuthException(code: $code, statusCode: $statusCode, message: $message)';
 }
+
+typedef AuthHeaderProvider = FutureOr<Map<String, String>> Function();
+typedef AuthTokenRefresher = Future<String?> Function();
 
 abstract final class AuthErrorCode {
   static const invalidRequest = 'invalid_request';
@@ -119,7 +126,7 @@ class TokenStore implements TokenStorage {
 
   Future<File> _file() async {
     if (_fileFactory != null) return _fileFactory();
-    final safeName = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final safeName = name.replaceAll(_unsafeFileNameCharacters, '_');
     return File('${(await getApplicationSupportDirectory()).path}/$safeName');
   }
 }
@@ -130,6 +137,8 @@ class AuthClient {
     String authPath = '/api/auth',
     http.Client? client,
     TokenStorage? tokenStore,
+    this.headerProvider,
+    this.onRefreshToken,
   }) : baseUrl = _normalizeBaseUrl(baseUrl),
        authPath = _normalizeAuthPath(authPath),
        _client = client ?? http.Client(),
@@ -139,10 +148,15 @@ class AuthClient {
   final String authPath;
   final http.Client _client;
   final TokenStorage _tokenStore;
+  final AuthHeaderProvider? headerProvider;
+  final AuthTokenRefresher? onRefreshToken;
+  final StreamController<bool> _authStateController =
+      StreamController<bool>.broadcast();
   String? _token;
 
   String? get token => _token;
   bool get isLoggedIn => _token?.isNotEmpty == true;
+  Stream<bool> get onAuthStateChanged => _authStateController.stream;
   Map<String, String> get authorizationHeaders => isLoggedIn
       ? {'Authorization': 'Bearer $_token'}
       : const <String, String>{};
@@ -170,11 +184,13 @@ class AuthClient {
     }
     await _tokenStore.write(token);
     _token = token;
+    _authStateController.add(true);
     return token;
   }
 
   Future<String?> restore({bool validate = false}) async {
     _token = await _tokenStore.read();
+    _authStateController.add(isLoggedIn);
     if (!isLoggedIn || !validate) return _token;
     try {
       await currentUser();
@@ -202,19 +218,40 @@ class AuthClient {
     String method,
     String path, {
     Map<String, dynamic>? body,
-  }) => _request(method.toUpperCase(), path, body: body, authenticated: true);
+  }) => authenticatedRequestAs<dynamic>(method, path, body: body);
+
+  Future<T> authenticatedRequestAs<T>(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    T Function(dynamic data)? decoder,
+  }) async {
+    final data = await _request(
+      method.toUpperCase(),
+      path,
+      body: body,
+      authenticated: true,
+    );
+    return decoder == null ? data as T : decoder(data);
+  }
+
   Future<void> logout() async {
     _token = null;
     await _tokenStore.clear();
+    _authStateController.add(false);
   }
 
-  void close() => _client.close();
+  void close() {
+    _client.close();
+    unawaited(_authStateController.close());
+  }
 
   Future<dynamic> _request(
     String method,
     String path, {
     Map<String, dynamic>? body,
     bool authenticated = false,
+    bool allowRefresh = true,
   }) async {
     if (authenticated && !isLoggedIn) {
       throw const AuthException(
@@ -225,6 +262,7 @@ class AuthClient {
     }
     final headers = <String, String>{
       'Content-Type': 'application/json; charset=utf-8',
+      if (headerProvider != null) ...await headerProvider!(),
       if (authenticated) ...authorizationHeaders,
     };
     try {
@@ -256,6 +294,24 @@ class AuthClient {
       };
       final response = await request.timeout(const Duration(seconds: 30));
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (authenticated &&
+            response.statusCode == 401 &&
+            allowRefresh &&
+            onRefreshToken != null) {
+          final refreshed = await onRefreshToken!();
+          if (refreshed != null && refreshed.isNotEmpty) {
+            _token = refreshed;
+            await _tokenStore.write(refreshed);
+            _authStateController.add(true);
+            return await _request(
+              method,
+              path,
+              body: body,
+              authenticated: true,
+              allowRefresh: false,
+            );
+          }
+        }
         if (authenticated && response.statusCode == 401) await logout();
         final error = _decodeError(response.body);
         throw AuthException(
@@ -289,7 +345,7 @@ class AuthClient {
   }
 
   static String _normalizeBaseUrl(String value) {
-    final trimmed = value.trim().replaceFirst(RegExp(r'/+$'), '');
+    final trimmed = value.trim().replaceFirst(_trailingSlashes, '');
     final uri = Uri.tryParse(trimmed);
     if (uri == null ||
         uri.host.isEmpty ||
@@ -301,7 +357,7 @@ class AuthClient {
   }
 
   static String _normalizeAuthPath(String value) {
-    final path = value.trim().replaceFirst(RegExp(r'/+$'), '');
+    final path = value.trim().replaceFirst(_trailingSlashes, '');
     if (!path.startsWith('/') || path.contains('?') || path.contains('#')) {
       throw ArgumentError.value(value, 'authPath', '必须是绝对 URL 路径');
     }

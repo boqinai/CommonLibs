@@ -1,4 +1,5 @@
 export 'update_check_schedule.dart';
+export 'update_dialog.dart';
 export 'update_download_controller.dart';
 
 import 'dart:async';
@@ -15,11 +16,13 @@ class AppUpdateInfo {
     required this.versionName,
     required this.downloadUrl,
     required this.forceUpdate,
+    this.releaseNotes = '',
   });
 
   final String versionName;
   final String downloadUrl;
   final bool forceUpdate;
+  final String releaseNotes;
 }
 
 class UpdateCheckResult {
@@ -75,6 +78,7 @@ class AppUpdateService {
         versionName: versionName,
         downloadUrl: downloadUrl,
         forceUpdate: data['force_update'] == true,
+        releaseNotes: data['release_notes']?.toString() ?? '',
       ),
     );
   }

@@ -7,7 +7,7 @@ Boqinai Flutter 应用共用的 Android 应用内更新插件。它统一负责�
 - 使用 Android 前台服务后台下载，在单条通知中展示进度条和数字百分比
 - 取消下载，并通过内置 `FileProvider` 打开系统 APK 安装器
 
-弹窗、文案、强制升级交互和自动检查频率由各 App 保留，因为这些是产品策略而不是更新协议。
+插件提供可直接使用的 Material 默认更新弹窗；各 App 仍可自定义文案、交互和自动检查频率。
 
 ## 引用
 
@@ -29,17 +29,16 @@ final updater = AppUpdateService(
 final result = await updater.checkForUpdate();
 if (result.status == UpdateCheckStatus.updateAvailable) {
   final update = result.update!;
-  int? downloadId;
-  final installed = await updater.downloadAndInstall(
-    update.downloadUrl,
-    version: update.versionName,
-    onStarted: (id) => downloadId = id,
-    onProgress: (progress) => print('${(progress * 100).round()}%'),
+  await showDefaultUpdateDialog(
+    context,
+    service: updater,
+    update: update,
+    onDownloadStarted: (id) => print('download: $id'),
   );
-
-  // 用户取消时：await updater.cancelDownload(downloadId!);
 }
 ```
+
+默认弹窗展示版本号和 `release_notes`。普通更新包含“稍后再说”与“后台下载”；强制更新会隐藏稍后按钮并禁止点击遮罩或返回键关闭。开始后弹窗立即关闭，下载由 Android 前台服务继续，通知栏展示百分比。
 
 接入现有项目时，删除原有 `app_update_service.dart` 及 `MainActivity` 中对应的更新 MethodChannel；各项目原有弹窗只需改为导入 `package:app_update/app_update.dart`。
 

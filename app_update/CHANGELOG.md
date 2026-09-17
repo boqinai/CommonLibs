@@ -1,3 +1,8 @@
+## 0.5.0
+
+- Add a reusable Material update dialog with release notes, forced-update handling, and a background-download action.
+- Add custom update-check policies and harden native download task cleanup and lifecycle handling.
+
 ## 0.4.0
 
 - Replace DownloadManager with a foreground download service and a single notification showing an explicit percentage.

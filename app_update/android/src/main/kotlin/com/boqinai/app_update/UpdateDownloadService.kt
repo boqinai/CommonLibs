@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 class UpdateDownloadService : Service() {
-    private val executor = Executors.newCachedThreadPool()
+    private val executor = Executors.newSingleThreadExecutor()
     private val cancellations = ConcurrentHashMap<Long, AtomicBoolean>()
 
     override fun onCreate() {
@@ -156,7 +156,7 @@ class UpdateDownloadService : Service() {
                 @Suppress("DEPRECATION")
                 stopForeground(false)
             }
-            stopSelf()
+            if (cancellations.isEmpty()) stopSelf()
         }
     }
 
@@ -252,6 +252,7 @@ class UpdateDownloadService : Service() {
             wifiOnly: Boolean,
         ): Long {
             val id = nextId.incrementAndGet()
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().clear().commit()
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, UpdateDownloadService::class.java).apply {

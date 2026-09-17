@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import os
 import re
 import shutil
 import subprocess
-import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlparse
 
 UPDATE_CENTER = "https://api.boqinai.com/updatecenter"
 APK_MIME = "application/vnd.android.package-archive"
+LOGGER = logging.getLogger("release_tool")
 
 
-def validate_release_options(args) -> None:
+def validate_release_options(args: argparse.Namespace) -> None:
     uri = urlparse(args.update_center)
     loopback = uri.hostname in {"localhost", "127.0.0.1", "::1"}
     if not uri.hostname or (uri.scheme != "https" and not (uri.scheme == "http" and loopback)):
@@ -112,7 +113,7 @@ def publish_github(apk: Path, repo: str, version: str, notes: str) -> None:
 
 
 def update_center_request(
-    apk: Path, app_name: str, args, token: str
+    apk: Path, app_name: str, args: argparse.Namespace, token: str
 ) -> tuple[list[str], str]:
     validate_release_options(args)
     endpoint = f"{args.update_center.rstrip('/')}/api/v1/releases"
@@ -170,11 +171,16 @@ def parser() -> argparse.ArgumentParser:
         default=os.environ.get("UPDATE_CENTER_URL", UPDATE_CENTER),
     )
     result.add_argument("--no-update-center", action="store_true")
+    result.add_argument("-v", "--verbose", action="store_true")
     return result
 
 
 def main() -> int:
     args = parser().parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s: %(message)s",
+    )
     project = Path(args.project).resolve()
     version = read_version(project)
     app_name = args.app_name or read_app_name(project)
@@ -190,7 +196,7 @@ def main() -> int:
     if token and not args.no_update_center:
         command, headers = update_center_request(apk, app_name, args, token)
         subprocess.run(command, input=headers, text=True, check=True)
-    print(f"Published {apk.name} ({version})")
+    LOGGER.info("Published %s (%s)", apk.name, version)
     return 0
 
 
@@ -198,5 +204,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        print(f"release failed: {error}", file=sys.stderr)
+        logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
+        LOGGER.error("release failed: %s", error)
         raise SystemExit(1)
