@@ -4,7 +4,7 @@ Boqinai Flutter 应用共用的 Android 应用内更新插件。它统一负责�
 
 - 调用更新中心并解析 `update_available`、`version_name`、`download_url`、`force_update`
 - 自动读取应用包名、`versionCode` 和 Android ID
-- 使用 Android `DownloadManager` 后台下载、通知栏展示和进度查询
+- 使用 Android 前台服务后台下载，在单条通知中展示进度条和数字百分比
 - 取消下载，并通过内置 `FileProvider` 打开系统 APK 安装器
 
 弹窗、文案、强制升级交互和自动检查频率由各 App 保留，因为这些是产品策略而不是更新协议。
@@ -45,7 +45,9 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 
 ## 生命周期与安装权限
 
-`AppUpdateService` 持有 HTTP Client；不再使用时必须调用 `close()`（在 `StatefulWidget` 中放到 `dispose()`）。`downloadAndInstall` 默认最多等待 30 分钟，超时会取消 DownloadManager 任务，可通过 `downloadTimeout` 调整。Android 8.0+ 未授权安装未知应用时，插件会打开当前应用对应的系统设置页，用户授权后重试安装。
+`AppUpdateService` 持有 HTTP Client；不再使用时必须调用 `close()`（在 `StatefulWidget` 中放到 `dispose()`）。`downloadAndInstall` 默认最多等待 30 分钟，超时会取消前台下载任务，可通过 `downloadTimeout` 调整。Android 8.0+ 未授权安装未知应用时，插件会打开当前应用对应的系统设置页，用户授权后重试安装。
+
+下载完成后可通过 `onDownloaded` 保存 APK 路径，授权返回后调用 `openApk(path)` 直接重试安装。`UpdateDownloadController` 会自动保存 `downloadedFilePath`，其 `retry()` 会优先重新打开已下载文件，不会重复下载。
 
 ## 自动检查与下载控制器
 
@@ -67,6 +69,6 @@ controller.addListener(() {
 await controller.start(); // retry() / cancel()
 ```
 
-调度模块只持久化最后检查时间；是否启用、频率选择和界面文案仍由 App 决定。`wifiOnly: true` 会直接使用 DownloadManager 的 Wi-Fi 网络约束。
+调度模块只持久化最后检查时间；是否启用、频率选择和界面文案仍由 App 决定。`wifiOnly: true` 会在非 Wi-Fi 网络下保持等待，恢复 Wi-Fi 后自动开始下载。Android 13+ 首次下载时插件会请求通知权限。
 
 远程更新接口和 APK 地址必须使用 HTTPS；仅 `localhost`、`127.0.0.1` 和 `::1` 可使用 HTTP。界面销毁时调用 `controller.dispose()`，控制器会取消仍在运行的下载。

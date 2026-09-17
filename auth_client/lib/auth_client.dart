@@ -228,11 +228,25 @@ class AuthClient {
       if (authenticated) ...authorizationHeaders,
     };
     try {
-      final uri = Uri.parse('$baseUrl$path');
+      final normalizedPath = path.startsWith('/') ? path : '/$path';
+      final uri = Uri.parse('$baseUrl$normalizedPath');
       final request = switch (method) {
         'GET' => _client.get(uri, headers: headers),
-        'POST' => _client.post(uri, headers: headers, body: jsonEncode(body)),
-        'PUT' => _client.put(uri, headers: headers, body: jsonEncode(body)),
+        'POST' => _client.post(
+          uri,
+          headers: headers,
+          body: body == null ? null : jsonEncode(body),
+        ),
+        'PUT' => _client.put(
+          uri,
+          headers: headers,
+          body: body == null ? null : jsonEncode(body),
+        ),
+        'PATCH' => _client.patch(
+          uri,
+          headers: headers,
+          body: body == null ? null : jsonEncode(body),
+        ),
         'DELETE' => _client.delete(
           uri,
           headers: headers,
@@ -250,9 +264,16 @@ class AuthClient {
           statusCode: response.statusCode,
         );
       }
-      return response.body.trim().isEmpty
-          ? <String, dynamic>{}
-          : jsonDecode(response.body);
+      if (response.body.trim().isEmpty) return <String, dynamic>{};
+      try {
+        return jsonDecode(response.body);
+      } on FormatException catch (error) {
+        throw AuthException(
+          '认证响应格式错误: $error',
+          code: AuthErrorCode.invalidResponse,
+          statusCode: response.statusCode,
+        );
+      }
     } on AuthException {
       rethrow;
     } catch (error) {

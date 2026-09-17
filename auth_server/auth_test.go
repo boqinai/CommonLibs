@@ -75,6 +75,13 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	if res := call("GET", "/private", session.Token, ""); res.Code != http.StatusOK {
 		t.Fatalf("private: %d %s", res.Code, res.Body.String())
 	}
+	req := httptest.NewRequest("GET", "/private", nil)
+	req.Header.Set("Authorization", "bearer "+session.Token)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("lowercase bearer: %d %s", res.Code, res.Body.String())
+	}
 	if res := call("GET", "/private", "", ""); res.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized: %d %s", res.Code, res.Body.String())
 	} else {

@@ -1,3 +1,9 @@
+## 0.7.0
+
+- Add PATCH support and normalize relative request paths.
+- Avoid serializing absent POST and PUT bodies as JSON `null`.
+- Classify successful non-JSON responses as `invalid_response`.
+
 ## 0.4.0
 
 - Add one-time legacy TokenStorage migration.

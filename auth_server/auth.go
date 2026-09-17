@@ -61,6 +61,16 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var exists int
+	err := s.db.QueryRowContext(r.Context(), "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists)
+	if err == nil {
+		writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
+		return
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "password hashing failed")
@@ -74,7 +84,6 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 		time.Now().UnixMilli(),
 	)
 	if err != nil {
-		var exists int
 		if s.db.QueryRowContext(r.Context(), "SELECT 1 FROM users WHERE phone=?", phone).Scan(&exists) == nil {
 			writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
 			return
@@ -160,11 +169,12 @@ func UserID(r *http.Request) (int64, bool) {
 }
 
 func (s *Server) authenticate(header string) (int64, error) {
-	if !strings.HasPrefix(header, "Bearer ") {
+	scheme, tokenText, found := strings.Cut(header, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
 		return 0, errors.New("missing bearer token")
 	}
 	token, err := jwt.Parse(
-		strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")),
+		strings.TrimSpace(tokenText),
 		func(*jwt.Token) (any, error) { return s.secret, nil },
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 	)

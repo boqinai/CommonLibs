@@ -4,7 +4,7 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 
 | 模块 | 用途 |
 | --- | --- |
-| `app_update` | Flutter Android 更新检查、DownloadManager 下载和安装 |
+| `app_update` | Flutter Android 更新检查、前台服务下载和安装 |
 | `auth_client` | Flutter 注册、登录、Bearer 请求和安全 Token 存储 |
 | `auth_server` | Go/SQLite 注册、登录、JWT 和认证中间件 |
 | `release_tool` | Flutter APK 构建、GitHub Release 和更新中心上传 |

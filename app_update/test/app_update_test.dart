@@ -42,7 +42,7 @@ void main() {
     expect(result.update?.forceUpdate, isTrue);
   });
 
-  test('uses DownloadManager and opens the downloaded APK', () async {
+  test('uses the native downloader and opens the downloaded APK', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     var progressQueries = 0;
@@ -113,7 +113,7 @@ void main() {
     expect(client.closed, isTrue);
   });
 
-  test('download timeout cancels the DownloadManager task', () async {
+  test('download timeout cancels the native download task', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     var cancelled = false;

@@ -17,7 +17,7 @@ void main() {
     expect(result.status, UpdateCheckStatus.failed);
   });
 
-  test('download query failure cancels the DownloadManager task', () async {
+  test('download query failure cancels the native download task', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     var cancelled = false;
@@ -89,6 +89,7 @@ class _QueuedUpdateService extends AppUpdateService {
     bool wifiOnly = false,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
+    void Function(String filePath)? onDownloaded,
   }) {
     onStarted?.call(++calls);
     return results[calls - 1].future;

@@ -23,8 +23,25 @@ void main() {
 
     expect(controller.downloadId, 7);
     expect(controller.progress, 0.5);
+    expect(controller.downloadedFilePath, '/tmp/app.apk');
     expect(controller.state, UpdateDownloadState.installed);
     expect(service.wifiOnly, isTrue);
+  });
+
+  test('retry opens the downloaded APK without downloading again', () async {
+    final service = _FakeUpdateService(result: false, installResult: true);
+    addTearDown(service.close);
+    final controller = UpdateDownloadController(
+      service: service,
+      update: update,
+    );
+
+    await controller.start();
+    await controller.retry();
+
+    expect(service.downloadCalls, 1);
+    expect(service.openedPath, '/tmp/app.apk');
+    expect(controller.state, UpdateDownloadState.installed);
   });
 
   test('cancellation wins over a pending download result', () async {
@@ -48,13 +65,19 @@ void main() {
 }
 
 class _FakeUpdateService extends AppUpdateService {
-  _FakeUpdateService({this.result = false, this.pending})
-    : super(updateApiUrl: 'https://example.com/update');
+  _FakeUpdateService({
+    this.result = false,
+    this.pending,
+    this.installResult = false,
+  }) : super(updateApiUrl: 'https://example.com/update');
 
   final bool result;
   final Completer<bool>? pending;
+  final bool installResult;
   bool? wifiOnly;
   int? cancelledId;
+  int downloadCalls = 0;
+  String? openedPath;
 
   @override
   Future<bool> downloadAndInstall(
@@ -64,11 +87,20 @@ class _FakeUpdateService extends AppUpdateService {
     bool wifiOnly = false,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
+    void Function(String filePath)? onDownloaded,
   }) async {
+    downloadCalls++;
     this.wifiOnly = wifiOnly;
     onStarted?.call(7);
     onProgress?.call(0.5);
+    onDownloaded?.call('/tmp/app.apk');
     return pending?.future ?? result;
+  }
+
+  @override
+  Future<bool> openApk(String filePath) async {
+    openedPath = filePath;
+    return installResult;
   }
 
   @override

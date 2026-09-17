@@ -42,7 +42,7 @@ final data = await auth.authenticatedRequest(
 );
 ```
 
-支持 GET、POST、PUT、DELETE；自动添加 Bearer Token、编码/解析 JSON，并在 401 时清除失效会话。不再使用时调用 `auth.close()`。
+支持 GET、POST、PUT、PATCH、DELETE；自动添加 Bearer Token、编码/解析 JSON，并在 401 时清除失效会话。不再使用时调用 `auth.close()`。
 
 远程认证地址必须使用 HTTPS；仅本机开发地址允许 HTTP。迁移旧明文 Token 时显式传入：
 

@@ -32,7 +32,7 @@ def read_version(project: Path) -> str:
     )
     if not match:
         raise ValueError("pubspec.yaml does not contain a version")
-    return match.group(1)
+    return match.group(1).strip("'\"")
 
 
 def read_app_name(project: Path) -> str:
@@ -41,6 +41,14 @@ def read_app_name(project: Path) -> str:
     if application is None:
         raise ValueError("AndroidManifest.xml does not contain an application")
     label = application.get("{http://schemas.android.com/apk/res/android}label")
+    if label and label.startswith("@string/"):
+        resource_name = label.removeprefix("@string/")
+        strings_file = project / "android/app/src/main/res/values/strings.xml"
+        if strings_file.is_file():
+            root = ET.parse(strings_file).getroot()
+            resource = root.find(f"string[@name='{resource_name}']")
+            if resource is not None and resource.text and resource.text.strip():
+                return resource.text.strip()
     if not label or label.startswith("@"):
         raise ValueError("pass --app-name when the manifest label is a resource")
     return label
@@ -68,7 +76,8 @@ def build_apk(project: Path, app_name: str, version: str) -> Path:
 
 
 def publish_github(apk: Path, repo: str, version: str, notes: str) -> None:
-    tag = f"v{version}"
+    normalized_version = version.lstrip("vV")
+    tag = f"v{normalized_version}"
     exists = subprocess.run(
         ["gh", "release", "view", tag, "--repo", repo],
         stdout=subprocess.DEVNULL,
@@ -95,9 +104,9 @@ def publish_github(apk: Path, repo: str, version: str, notes: str) -> None:
             "--repo",
             repo,
             "--title",
-            f"Version {version}",
+            f"Version {normalized_version}",
             "--notes",
-            notes or f"Release v{version}",
+            notes or f"Release v{normalized_version}",
         ]
     subprocess.run(command, check=True)
 
@@ -136,6 +145,11 @@ def update_center_request(
         "--form-string",
         f"app={app_name}",
     ]
+    if "\r" in token or "\n" in token:
+        raise ValueError("UPDATE_CENTER_TOKEN must not contain newlines")
+    token = token.strip()
+    if not token:
+        raise ValueError("UPDATE_CENTER_TOKEN must not be empty")
     return command, f"Authorization: Bearer {token}\n"
 
 

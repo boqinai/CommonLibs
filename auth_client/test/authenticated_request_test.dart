@@ -67,6 +67,55 @@ void main() {
     expect(await store.read(), isNull);
   });
 
+  test('supports PATCH and normalizes a relative request path', () async {
+    await store.write('jwt');
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((request) async {
+        expect(request.method, 'PATCH');
+        expect(request.url.toString(), 'https://example.test/api/user');
+        expect(request.body, isEmpty);
+        return http.Response('{}', 200);
+      }),
+    );
+    addTearDown(client.close);
+    await client.restore();
+
+    await client.authenticatedRequest('patch', 'api/user');
+  });
+
+  test(
+    'classifies a successful non-JSON response as invalid response',
+    () async {
+      await store.write('jwt');
+      final client = AuthClient(
+        baseUrl: 'https://example.test',
+        tokenStore: store,
+        client: MockClient((_) async => http.Response('not-json', 200)),
+      );
+      addTearDown(client.close);
+      await client.restore();
+
+      await expectLater(
+        client.authenticatedRequest('GET', '/api/user'),
+        throwsA(
+          isA<AuthException>()
+              .having(
+                (error) => error.code,
+                'code',
+                AuthErrorCode.invalidResponse,
+              )
+              .having(
+                (error) => error.isNetworkFailure,
+                'isNetworkFailure',
+                isFalse,
+              ),
+        ),
+      );
+    },
+  );
+
   test('close releases the HTTP client', () {
     final transport = _TrackingClient();
     final client = AuthClient(

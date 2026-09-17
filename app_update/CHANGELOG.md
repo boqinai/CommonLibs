@@ -1,3 +1,12 @@
+## 0.4.0
+
+- Replace DownloadManager with a foreground download service and a single notification showing an explicit percentage.
+- Request Android 13+ notification permission before starting an update download.
+- Keep Wi-Fi-only downloads waiting in the foreground until Wi-Fi is available.
+- Pass the declared data-sync type when starting the foreground service on Android 10+.
+- Complete pending notification-permission calls when the Activity or Flutter engine detaches.
+- Fall back to copying the completed APK when an atomic rename is unavailable.
+
 ## 0.3.0
 
 - Require HTTPS for remote update endpoints and APK downloads.

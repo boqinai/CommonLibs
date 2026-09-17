@@ -43,7 +43,7 @@ class UpdateRequestContext {
 
 typedef UpdateRequestContextLoader = Future<UpdateRequestContext?> Function();
 
-/// 更新中心客户端。检查协议和 Android DownloadManager/安装逻辑均由此插件负责。
+/// 更新中心客户端。检查协议和 Android 前台下载/安装逻辑均由此插件负责。
 class AppUpdateService {
   AppUpdateService({
     required this.updateApiUrl,
@@ -115,7 +115,7 @@ class AppUpdateService {
     }
   }
 
-  /// 交给 Android DownloadManager 后台下载，完成后打开系统安装器。
+  /// 交给 Android 前台服务后台下载，完成后打开系统安装器。
   Future<bool> downloadAndInstall(
     String downloadUrl, {
     required String version,
@@ -123,6 +123,7 @@ class AppUpdateService {
     bool wifiOnly = false,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
+    void Function(String filePath)? onDownloaded,
   }) async {
     if (!_supportsAndroid || !_isHttpUrl(downloadUrl) || version.isEmpty) {
       return false;
@@ -169,10 +170,8 @@ class AppUpdateService {
         if (status == 8) {
           completed = true;
           onProgress?.call(1);
-          return await _platform.invokeMethod<bool>('openApk', {
-                'path': filePath,
-              }) ??
-              false;
+          onDownloaded?.call(filePath);
+          return await openApk(filePath);
         }
         if (status == 16) {
           await _cancelQuietly(activeDownloadId);
@@ -188,6 +187,20 @@ class AppUpdateService {
         await _cancelQuietly(activeDownloadId);
       }
       debugPrint('下载或安装 APK 失败: $error');
+      return false;
+    }
+  }
+
+  /// 打开已下载的 APK。可在用户授予“安装未知应用”权限后直接重试安装。
+  Future<bool> openApk(String filePath) async {
+    if (!_supportsAndroid || filePath.isEmpty) return false;
+    try {
+      return await _platform.invokeMethod<bool>('openApk', {
+            'path': filePath,
+          }) ??
+          false;
+    } catch (error) {
+      debugPrint('打开 APK 失败: $error');
       return false;
     }
   }

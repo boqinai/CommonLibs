@@ -22,6 +22,7 @@ class UpdateDownloadController extends ChangeNotifier {
   UpdateDownloadState state = UpdateDownloadState.idle;
   double? progress;
   int? downloadId;
+  String? downloadedFilePath;
   int _generation = 0;
   bool _disposed = false;
 
@@ -31,6 +32,7 @@ class UpdateDownloadController extends ChangeNotifier {
     state = UpdateDownloadState.downloading;
     progress = null;
     downloadId = null;
+    downloadedFilePath = null;
     _notify();
 
     bool installed;
@@ -53,6 +55,11 @@ class UpdateDownloadController extends ChangeNotifier {
           progress = value;
           _notify();
         },
+        onDownloaded: (path) {
+          if (generation != _generation || _disposed) return;
+          downloadedFilePath = path;
+          _notify();
+        },
       );
     } catch (_) {
       installed = false;
@@ -64,7 +71,22 @@ class UpdateDownloadController extends ChangeNotifier {
     _notify();
   }
 
-  Future<void> retry() => start();
+  Future<void> retry() => downloadedFilePath == null ? start() : install();
+
+  /// 重新打开已经下载完成的 APK，不会再次发起下载。
+  Future<void> install() async {
+    if (state == UpdateDownloadState.downloading ||
+        downloadedFilePath == null) {
+      return;
+    }
+    final generation = ++_generation;
+    final installed = await service.openApk(downloadedFilePath!);
+    if (generation != _generation || _disposed) return;
+    state = installed
+        ? UpdateDownloadState.installed
+        : UpdateDownloadState.failed;
+    _notify();
+  }
 
   Future<void> cancel() async {
     if (state != UpdateDownloadState.downloading) return;
