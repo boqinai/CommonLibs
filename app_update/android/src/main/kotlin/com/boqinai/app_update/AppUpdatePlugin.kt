@@ -21,6 +21,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.PluginRegistry
 import java.io.File
+import java.security.MessageDigest
 
 class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     PluginRegistry.RequestPermissionsResultListener {
@@ -103,6 +104,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         val version = call.argument<String>("version")
         val wifiOnly = call.argument<Boolean>("wifiOnly") == true
         val expectedSha256 = call.argument<String>("sha256")
+        val expectedMd5 = call.argument<String>("md5")
         val expectedSize = call.longArgument("fileSize")
         if (url.isNullOrBlank() || version.isNullOrBlank()) {
             result.error("invalid_args", "URL or version is empty", null)
@@ -113,6 +115,18 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                 ?: throw IllegalStateException("External downloads directory is unavailable")
             val safeVersion = version.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val destination = File(directory, "app_update_$safeVersion.apk")
+
+            // 检查本地已存在的安装包是否完整且校验一致
+            if (isFileValid(destination, expectedSha256, expectedMd5, expectedSize)) {
+                val id = UpdateDownloadService.recordCompleted(context, destination)
+                result.success(mapOf(
+                    "downloadId" to id,
+                    "filePath" to destination.absolutePath,
+                    "alreadyDownloaded" to true,
+                ))
+                return
+            }
+
             if (destination.exists()) destination.delete()
             val id = UpdateDownloadService.enqueue(
                 context,
@@ -121,6 +135,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                 destination,
                 wifiOnly,
                 expectedSha256,
+                expectedMd5,
                 expectedSize,
             )
             result.success(mapOf("downloadId" to id, "filePath" to destination.absolutePath))
@@ -128,6 +143,56 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             result.error("download_in_progress", error.message, null)
         } catch (error: Exception) {
             result.error("download_failed", error.message, null)
+        }
+    }
+
+    private fun isFileValid(
+        file: File,
+        expectedSha256: String?,
+        expectedMd5: String?,
+        expectedSize: Long?,
+    ): Boolean {
+        if (!file.exists() || !file.isFile || file.length() <= 0) return false
+
+        // 必须具备至少一个有效校验凭据（sha256、md5、或者预期大小）
+        val hasHash = !expectedSha256.isNullOrBlank() || !expectedMd5.isNullOrBlank()
+        val hasSize = expectedSize != null && expectedSize > 0
+        if (!hasHash && !hasSize) return false
+
+        if (hasSize && file.length() != expectedSize) {
+            return false
+        }
+
+        if (!expectedSha256.isNullOrBlank()) {
+            val actual = calculateHash(file, "SHA-256") ?: return false
+            if (!actual.equals(expectedSha256, ignoreCase = true)) {
+                return false
+            }
+        }
+
+        if (!expectedMd5.isNullOrBlank()) {
+            val actual = calculateHash(file, "MD5") ?: return false
+            if (!actual.equals(expectedMd5, ignoreCase = true)) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private fun calculateHash(file: File, algorithm: String): String? {
+        return try {
+            val digest = MessageDigest.getInstance(algorithm)
+            file.inputStream().use { input ->
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    digest.update(buffer, 0, bytesRead)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        } catch (_: Exception) {
+            null
         }
     }
 

@@ -1,3 +1,8 @@
+## 0.8.0
+
+- Check existing local APK MD5, SHA-256 and size before downloading to avoid duplicate downloads.
+- Add support for MD5 checksum validation in AppUpdateInfo and download pipeline.
+
 ## 0.7.0
 
 - Verify APK SHA-256 integrity and file size before opening the installer.

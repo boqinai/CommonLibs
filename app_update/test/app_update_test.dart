@@ -44,16 +44,19 @@ void main() {
 
   test('parses optional APK integrity metadata', () {
     final digest = List.filled(64, 'a').join();
+    final md5Digest = List.filled(32, 'b').join();
     final result = AppUpdateService.parseResponse({
       'update_available': true,
       'version_name': '1.1.0',
       'download_url': 'https://example.com/app.apk',
       'sha256': digest,
+      'md5': md5Digest,
       'file_size': 1024,
     });
 
     expect(result.status, UpdateCheckStatus.updateAvailable);
     expect(result.update?.sha256, digest);
+    expect(result.update?.md5, md5Digest);
     expect(result.update?.fileSize, 1024);
   });
 
@@ -64,6 +67,15 @@ void main() {
         'version_name': '1.1.0',
         'download_url': 'https://example.com/app.apk',
         'sha256': 'not-a-digest',
+      }).status,
+      UpdateCheckStatus.failed,
+    );
+    expect(
+      AppUpdateService.parseResponse({
+        'update_available': true,
+        'version_name': '1.1.0',
+        'download_url': 'https://example.com/app.apk',
+        'md5': 'short-md5',
       }).status,
       UpdateCheckStatus.failed,
     );

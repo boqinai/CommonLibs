@@ -34,6 +34,7 @@ class AppUpdateInfo {
     required this.forceUpdate,
     this.releaseNotes = '',
     this.sha256,
+    this.md5,
     this.fileSize,
   });
 
@@ -42,6 +43,7 @@ class AppUpdateInfo {
   final bool forceUpdate;
   final String releaseNotes;
   final String? sha256;
+  final String? md5;
   final int? fileSize;
 }
 
@@ -91,6 +93,7 @@ class AppUpdateService {
     final versionName = data['version_name']?.toString() ?? '';
     final downloadUrl = data['download_url']?.toString() ?? '';
     final sha256 = data['sha256']?.toString().trim();
+    final md5 = data['md5']?.toString().trim();
     final fileSize = data['file_size'];
     if (versionName.isEmpty || !_isHttpUrl(downloadUrl)) {
       return const UpdateCheckResult(UpdateCheckStatus.failed);
@@ -98,6 +101,11 @@ class AppUpdateService {
     if (sha256 != null &&
         sha256.isNotEmpty &&
         !RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(sha256)) {
+      return const UpdateCheckResult(UpdateCheckStatus.failed);
+    }
+    if (md5 != null &&
+        md5.isNotEmpty &&
+        !RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(md5)) {
       return const UpdateCheckResult(UpdateCheckStatus.failed);
     }
     if (fileSize != null && (fileSize is! int || fileSize <= 0)) {
@@ -111,6 +119,7 @@ class AppUpdateService {
         forceUpdate: data['force_update'] == true,
         releaseNotes: data['release_notes']?.toString() ?? '',
         sha256: sha256?.isEmpty == true ? null : sha256,
+        md5: md5?.isEmpty == true ? null : md5,
         fileSize: fileSize as int?,
       ),
     );
@@ -160,6 +169,7 @@ class AppUpdateService {
     Duration inactivityTimeout = const Duration(seconds: 30),
     bool wifiOnly = false,
     String? expectedSha256,
+    String? expectedMd5,
     int? expectedSize,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
@@ -169,10 +179,13 @@ class AppUpdateService {
     final validSha256 =
         expectedSha256 == null ||
         RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(expectedSha256);
+    final validMd5 =
+        expectedMd5 == null || RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(expectedMd5);
     if (!_supportsAndroid ||
         !_isHttpUrl(downloadUrl) ||
         version.isEmpty ||
         !validSha256 ||
+        !validMd5 ||
         (expectedSize != null && expectedSize <= 0) ||
         inactivityTimeout <= Duration.zero) {
       onFailure?.call(
@@ -195,6 +208,7 @@ class AppUpdateService {
           'version': version,
           'wifiOnly': wifiOnly,
           'sha256': expectedSha256,
+          'md5': expectedMd5,
           'fileSize': expectedSize,
         },
       );

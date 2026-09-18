@@ -83,6 +83,7 @@ class _FakeUpdateService extends AppUpdateService {
   int downloadCalls = 0;
   String? openedPath;
   String? expectedSha256;
+  String? expectedMd5;
   int? expectedSize;
 
   @override
@@ -93,6 +94,7 @@ class _FakeUpdateService extends AppUpdateService {
     Duration inactivityTimeout = const Duration(seconds: 30),
     bool wifiOnly = false,
     String? expectedSha256,
+    String? expectedMd5,
     int? expectedSize,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
@@ -102,6 +104,7 @@ class _FakeUpdateService extends AppUpdateService {
     downloadCalls++;
     this.wifiOnly = wifiOnly;
     this.expectedSha256 = expectedSha256;
+    this.expectedMd5 = expectedMd5;
     this.expectedSize = expectedSize;
     onStarted?.call(7);
     onProgress?.call(0.5);
