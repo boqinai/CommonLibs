@@ -69,9 +69,42 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	if login.Code != http.StatusOK || json.Unmarshal(login.Body.Bytes(), &session) != nil || session.Token == "" {
 		t.Fatalf("login: %d %s", login.Code, login.Body.String())
 	}
-	if res := call("GET", "/api/auth/me", session.Token, ""); res.Code != http.StatusOK {
-		t.Fatalf("me: %d %s", res.Code, res.Body.String())
+	meRes := call("GET", "/api/auth/me", session.Token, "")
+	if meRes.Code != http.StatusOK {
+		t.Fatalf("me: %d %s", meRes.Code, meRes.Body.String())
 	}
+	var meData struct {
+		ID       int64  `json:"id"`
+		Phone    string `json:"phone"`
+		Nickname string `json:"nickname"`
+		Avatar   string `json:"avatar"`
+	}
+	if err := json.Unmarshal(meRes.Body.Bytes(), &meData); err != nil {
+		t.Fatalf("decode me: %v", err)
+	}
+	if meData.Phone != "13800000000" || meData.Nickname != "" || meData.Avatar != "0" {
+		t.Fatalf("unexpected meData: %+v", meData)
+	}
+
+	// Update profile
+	updateRes := call("PUT", "/api/auth/profile", session.Token, `{"nickname":"棋圣","avatar":"4"}`)
+	if updateRes.Code != http.StatusOK {
+		t.Fatalf("update profile: %d %s", updateRes.Code, updateRes.Body.String())
+	}
+	meRes2 := call("GET", "/api/auth/me", session.Token, "")
+	if err := json.Unmarshal(meRes2.Body.Bytes(), &meData); err != nil {
+		t.Fatalf("decode me2: %v", err)
+	}
+	if meData.Nickname != "棋圣" || meData.Avatar != "4" {
+		t.Fatalf("updated meData mismatch: %+v", meData)
+	}
+
+	// Reject oversized profile
+	badProfileRes := call("PUT", "/api/auth/profile", session.Token, `{"nickname":"`+strings.Repeat("a", 70)+`"}`)
+	if badProfileRes.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for oversized nickname, got: %d", badProfileRes.Code)
+	}
+
 	if res := call("GET", "/private", session.Token, ""); res.Code != http.StatusOK {
 		t.Fatalf("private: %d %s", res.Code, res.Body.String())
 	}
@@ -112,5 +145,46 @@ func TestInitConfiguresSQLiteForConcurrentWrites(t *testing.T) {
 	}
 	if journalMode != "wal" || busyTimeout != 5000 {
 		t.Fatalf("journal_mode=%q busy_timeout=%d", journalMode, busyTimeout)
+	}
+}
+
+func TestEnsureColumnsMigratesExistingLegacyTable(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Create legacy users table without nickname and avatar columns
+	_, err = db.Exec(`CREATE TABLE users (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		phone TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	);
+	INSERT INTO users(phone, password_hash, created_at) VALUES('13900000000', 'hash', 1000);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	auth := New(db, []byte("test-secret"))
+	if err := auth.Init(context.Background()); err != nil {
+		t.Fatalf("Init with legacy table failed: %v", err)
+	}
+
+	user, err := auth.store.GetUserByID(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetUserByID after migration failed: %v", err)
+	}
+	if user.Phone != "13900000000" || user.Nickname != "" || user.Avatar != "" {
+		t.Fatalf("unexpected user after migration: %+v", user)
+	}
+
+	if err := auth.store.UpdateProfile(context.Background(), 1, "老棋手", "3"); err != nil {
+		t.Fatalf("UpdateProfile after migration failed: %v", err)
+	}
+	updated, err := auth.store.GetUserByID(context.Background(), 1)
+	if err != nil || updated.Nickname != "老棋手" || updated.Avatar != "3" {
+		t.Fatalf("expected updated profile, got: %+v, err: %v", updated, err)
 	}
 }

@@ -160,4 +160,40 @@ void main() {
     expect(client.isLoggedIn, isFalse);
     expect(await store.read(), isNull);
   });
+
+  test('currentUserProfile and updateProfile manage user profile', () async {
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((request) async {
+        if (request.url.path == '/api/auth/me') {
+          return http.Response(
+            '{"id":8,"phone":"13811112222","nickname":"旧昵称","avatar":"1"}',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.url.path == '/api/auth/profile' && request.method == 'PUT') {
+          expect(request.body, contains('新昵称'));
+          expect(request.body, contains('5'));
+          return http.Response(
+            '{"ok":true,"profile":{"id":8,"phone":"13811112222","nickname":"新昵称","avatar":"5"}}',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response('{"token":"jwt"}', 200);
+      }),
+    );
+    await client.login('13811112222', '123456');
+
+    final profile = await client.currentUserProfile();
+    expect(profile.id, 8);
+    expect(profile.nickname, '旧昵称');
+    expect(profile.avatar, '1');
+
+    final updated = await client.updateProfile(nickname: '新昵称', avatar: '5');
+    expect(updated.nickname, '新昵称');
+    expect(updated.avatar, '5');
+  });
 }

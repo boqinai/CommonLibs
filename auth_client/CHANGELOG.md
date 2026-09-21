@@ -1,3 +1,8 @@
+## 0.11.0
+
+- Add `UserProfile` model and `updateProfile` API to manage user nickname and avatar.
+- Decode responses as UTF-8 by default.
+
 ## 0.10.0
 
 - Invalidate in-flight token refresh completions if logout occurs concurrently.

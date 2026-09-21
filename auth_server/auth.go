@@ -96,6 +96,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/register", s.Register)
 	mux.HandleFunc("/api/auth/login", s.Login)
 	mux.Handle("/api/auth/me", s.RequireAuth(http.HandlerFunc(s.Me)))
+	mux.Handle("/api/auth/profile", s.RequireAuth(http.HandlerFunc(s.UpdateProfile)))
 }
 
 func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +194,71 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "phone": user.Phone})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":       id,
+		"phone":    user.Phone,
+		"nickname": user.Nickname,
+		"avatar":   user.Avatar,
+	})
+}
+
+func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	id, ok := UserID(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var input struct {
+		Nickname *string `json:"nickname"`
+		Avatar   *string `json:"avatar"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request")
+		return
+	}
+	ctx, cancel := s.dbContext(r.Context())
+	defer cancel()
+	user, err := s.store.GetUserByID(ctx, id)
+	if errors.Is(err, ErrUserNotFound) {
+		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
+		return
+	}
+	nickname := user.Nickname
+	if input.Nickname != nil {
+		nickname = strings.TrimSpace(*input.Nickname)
+	}
+	avatar := user.Avatar
+	if input.Avatar != nil {
+		avatar = strings.TrimSpace(*input.Avatar)
+	}
+	if len(nickname) > 64 || len(avatar) > 256 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "nickname must be <= 64 bytes and avatar <= 256 bytes")
+		return
+	}
+	if err := s.store.UpdateProfile(ctx, id, nickname, avatar); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to update profile")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+		"profile": map[string]any{
+			"id":       id,
+			"phone":    user.Phone,
+			"nickname": nickname,
+			"avatar":   avatar,
+		},
+	})
 }
 
 func (s *Server) RequireAuth(next http.Handler) http.Handler {

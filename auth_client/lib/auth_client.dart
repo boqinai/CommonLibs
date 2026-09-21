@@ -27,6 +27,69 @@ class AuthException implements Exception {
       'AuthException(code: $code, statusCode: $statusCode, message: $message)';
 }
 
+class UserProfile {
+  const UserProfile({
+    required this.id,
+    required this.phone,
+    this.nickname = '',
+    this.avatar = '',
+  });
+
+  final int id;
+  final String phone;
+  final String nickname;
+  final String avatar;
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    return UserProfile(
+      id: json['id'] is int
+          ? json['id'] as int
+          : (json['id'] is num ? (json['id'] as num).toInt() : 0),
+      phone: json['phone'] as String? ?? '',
+      nickname: json['nickname'] as String? ?? '',
+      avatar: json['avatar']?.toString() ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'phone': phone,
+    'nickname': nickname,
+    'avatar': avatar,
+  };
+
+  UserProfile copyWith({
+    int? id,
+    String? phone,
+    String? nickname,
+    String? avatar,
+  }) {
+    return UserProfile(
+      id: id ?? this.id,
+      phone: phone ?? this.phone,
+      nickname: nickname ?? this.nickname,
+      avatar: avatar ?? this.avatar,
+    );
+  }
+
+  @override
+  String toString() =>
+      'UserProfile(id: $id, phone: $phone, nickname: $nickname, avatar: $avatar)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UserProfile &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          phone == other.phone &&
+          nickname == other.nickname &&
+          avatar == other.avatar;
+
+  @override
+  int get hashCode => Object.hash(id, phone, nickname, avatar);
+}
+
 typedef AuthHeaderProvider = FutureOr<Map<String, String>> Function();
 typedef AuthTokenRefresher = Future<String?> Function();
 
@@ -218,6 +281,29 @@ class AuthClient {
     return data;
   }
 
+  Future<UserProfile> currentUserProfile() async {
+    final data = await currentUser();
+    return UserProfile.fromJson(data);
+  }
+
+  Future<UserProfile> updateProfile({String? nickname, String? avatar}) async {
+    final body = <String, dynamic>{
+      'nickname': ?nickname,
+      'avatar': ?avatar,
+    };
+    final data = await _request(
+      'PUT',
+      '$authPath/profile',
+      body: body,
+      authenticated: true,
+    );
+    if (data is Map<String, dynamic> &&
+        data['profile'] is Map<String, dynamic>) {
+      return UserProfile.fromJson(data['profile'] as Map<String, dynamic>);
+    }
+    return currentUserProfile();
+  }
+
   Future<dynamic> authenticatedRequest(
     String method,
     String path, {
@@ -338,16 +424,18 @@ class AuthClient {
           }
         }
         if (authenticated && response.statusCode == 401) await logout();
-        final error = _decodeError(response.body);
+        final responseBody = utf8.decode(response.bodyBytes);
+        final error = _decodeError(responseBody);
         throw AuthException(
           error.message,
           code: error.code,
           statusCode: response.statusCode,
         );
       }
-      if (response.body.trim().isEmpty) return <String, dynamic>{};
+      final responseBody = utf8.decode(response.bodyBytes);
+      if (responseBody.trim().isEmpty) return <String, dynamic>{};
       try {
-        return jsonDecode(response.body);
+        return jsonDecode(responseBody);
       } on FormatException catch (error) {
         throw AuthException(
           '认证响应格式错误: $error',
