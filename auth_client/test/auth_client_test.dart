@@ -173,7 +173,8 @@ void main() {
             headers: {'content-type': 'application/json; charset=utf-8'},
           );
         }
-        if (request.url.path == '/api/auth/profile' && request.method == 'PUT') {
+        if (request.url.path == '/api/auth/profile' &&
+            request.method == 'PUT') {
           expect(request.body, contains('新昵称'));
           expect(request.body, contains('5'));
           return http.Response(
@@ -195,5 +196,44 @@ void main() {
     final updated = await client.updateProfile(nickname: '新昵称', avatar: '5');
     expect(updated.nickname, '新昵称');
     expect(updated.avatar, '5');
+  });
+
+  test('rejects malformed user profiles instead of creating empty users', () {
+    expect(
+      () => UserProfile.fromJson({'id': 0, 'phone': ''}),
+      throwsA(
+        isA<AuthException>().having(
+          (error) => error.code,
+          'code',
+          AuthErrorCode.invalidResponse,
+        ),
+      ),
+    );
+  });
+
+  test('updateProfile rejects a response without a profile', () async {
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/login')) {
+          return http.Response('{"token":"jwt"}', 200);
+        }
+        return http.Response('{"ok":true}', 200);
+      }),
+    );
+    addTearDown(client.close);
+    await client.login('13800000000', '123456');
+
+    await expectLater(
+      client.updateProfile(nickname: 'new name'),
+      throwsA(
+        isA<AuthException>().having(
+          (error) => error.code,
+          'code',
+          AuthErrorCode.invalidResponse,
+        ),
+      ),
+    );
   });
 }

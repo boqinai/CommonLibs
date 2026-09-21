@@ -117,6 +117,34 @@ void main() {
     },
   );
 
+  test('classifies invalid UTF-8 as an invalid response', () async {
+    await store.write('jwt');
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((_) async => http.Response.bytes([0xff, 0xfe], 200)),
+    );
+    addTearDown(client.close);
+    await client.restore();
+
+    await expectLater(
+      client.authenticatedRequest('GET', '/api/user'),
+      throwsA(
+        isA<AuthException>()
+            .having(
+              (error) => error.code,
+              'code',
+              AuthErrorCode.invalidResponse,
+            )
+            .having(
+              (error) => error.isNetworkFailure,
+              'isNetworkFailure',
+              isFalse,
+            ),
+      ),
+    );
+  });
+
   test('concurrent 401 responses share one token refresh', () async {
     await store.write('expired');
     var refreshCalls = 0;

@@ -1,3 +1,8 @@
+## 0.11.1
+
+- Validate profile payloads and classify invalid UTF-8 responses as `invalid_response`.
+- Reject malformed profile-update responses instead of hiding them with a follow-up request.
+
 ## 0.11.0
 
 - Add `UserProfile` model and `updateProfile` API to manage user nickname and avatar.
@@ -40,4 +45,3 @@
 ## 0.1.0
 
 - Add shared registration, login, token persistence, restore, logout, and optional current-user validation.
-

@@ -176,15 +176,30 @@ func TestEnsureColumnsMigratesExistingLegacyTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserByID after migration failed: %v", err)
 	}
-	if user.Phone != "13900000000" || user.Nickname != "" || user.Avatar != "" {
+	if user.Phone != "13900000000" || user.Nickname != "" || user.Avatar != "0" {
 		t.Fatalf("unexpected user after migration: %+v", user)
 	}
 
-	if err := auth.store.UpdateProfile(context.Background(), 1, "老棋手", "3"); err != nil {
+	profileStore, ok := auth.store.(UserProfileStore)
+	if !ok {
+		t.Fatal("SQLite store does not implement UserProfileStore")
+	}
+	nickname := "老棋手"
+	avatar := "3"
+	if _, err := profileStore.UpdateProfile(context.Background(), 1, &nickname, &avatar); err != nil {
 		t.Fatalf("UpdateProfile after migration failed: %v", err)
 	}
 	updated, err := auth.store.GetUserByID(context.Background(), 1)
 	if err != nil || updated.Nickname != "老棋手" || updated.Avatar != "3" {
 		t.Fatalf("expected updated profile, got: %+v, err: %v", updated, err)
+	}
+
+	nextAvatar := "4"
+	partial, err := profileStore.UpdateProfile(context.Background(), 1, nil, &nextAvatar)
+	if err != nil {
+		t.Fatalf("partial profile update failed: %v", err)
+	}
+	if partial.Nickname != "老棋手" || partial.Avatar != "4" {
+		t.Fatalf("partial update overwrote another field: %+v", partial)
 	}
 }

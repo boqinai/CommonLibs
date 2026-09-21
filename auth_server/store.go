@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -23,7 +24,12 @@ type UserStore interface {
 	CreateUser(context.Context, string, string) (int64, error)
 	GetUserByPhone(context.Context, string) (*User, error)
 	GetUserByID(context.Context, int64) (*User, error)
-	UpdateProfile(context.Context, int64, string, string) error
+}
+
+// UserProfileStore is an optional capability implemented by stores that
+// support atomic partial profile updates.
+type UserProfileStore interface {
+	UpdateProfile(context.Context, int64, *string, *string) (*User, error)
 }
 
 type SQLiteUserStore struct{ db *sql.DB }
@@ -39,7 +45,7 @@ func (s *SQLiteUserStore) Init(ctx context.Context) error {
 		password_hash TEXT NOT NULL,
 		created_at INTEGER NOT NULL,
 		nickname TEXT NOT NULL DEFAULT '',
-		avatar TEXT NOT NULL DEFAULT ''
+		avatar TEXT NOT NULL DEFAULT '0'
 	)`)
 	if err != nil {
 		return err
@@ -53,7 +59,6 @@ func (s *SQLiteUserStore) ensureColumns(ctx context.Context) error {
 		return err
 	}
 	defer rows.Close()
-
 	hasNickname := false
 	hasAvatar := false
 	for rows.Next() {
@@ -72,20 +77,32 @@ func (s *SQLiteUserStore) ensureColumns(ctx context.Context) error {
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
 		return err
 	}
 
 	if !hasNickname {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''`); err != nil {
+		if err := s.addColumn(ctx, `ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
 	if !hasAvatar {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''`); err != nil {
+		if err := s.addColumn(ctx, `ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT '0'`); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *SQLiteUserStore) addColumn(ctx context.Context, statement string) error {
+	_, err := s.db.ExecContext(ctx, statement)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 func (s *SQLiteUserStore) UserExists(ctx context.Context, phone string) (bool, error) {
@@ -129,17 +146,28 @@ func (s *SQLiteUserStore) GetUserByID(ctx context.Context, id int64) (*User, err
 	return user, nil
 }
 
-func (s *SQLiteUserStore) UpdateProfile(ctx context.Context, id int64, nickname, avatar string) error {
-	res, err := s.db.ExecContext(ctx, "UPDATE users SET nickname=?, avatar=? WHERE id=?", nickname, avatar, id)
+func (s *SQLiteUserStore) UpdateProfile(
+	ctx context.Context,
+	id int64,
+	nickname *string,
+	avatar *string,
+) (*User, error) {
+	user := &User{}
+	err := s.db.QueryRowContext(
+		ctx,
+		`UPDATE users
+		 SET nickname=COALESCE(?, nickname), avatar=COALESCE(?, avatar)
+		 WHERE id=?
+		 RETURNING id, phone, password_hash, nickname, avatar`,
+		nickname,
+		avatar,
+		id,
+	).Scan(&user.ID, &user.Phone, &user.PasswordHash, &user.Nickname, &user.Avatar)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	return user, nil
 }

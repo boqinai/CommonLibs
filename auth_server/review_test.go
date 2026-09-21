@@ -69,3 +69,32 @@ func TestInitDoesNotChangeConnectionPoolLimit(t *testing.T) {
 		t.Fatalf("max open connections changed to %d", got)
 	}
 }
+
+type legacyUserStore struct{}
+
+func (legacyUserStore) Init(context.Context) error { return nil }
+func (legacyUserStore) UserExists(context.Context, string) (bool, error) {
+	return false, nil
+}
+func (legacyUserStore) CreateUser(context.Context, string, string) (int64, error) {
+	return 1, nil
+}
+func (legacyUserStore) GetUserByPhone(context.Context, string) (*User, error) {
+	return nil, ErrUserNotFound
+}
+func (legacyUserStore) GetUserByID(context.Context, int64) (*User, error) {
+	return &User{ID: 1, Phone: "13800000000"}, nil
+}
+
+func TestLegacyUserStoreRemainsCompatible(t *testing.T) {
+	auth := NewWithStore(legacyUserStore{}, []byte("test-secret"))
+	request := httptest.NewRequest(http.MethodPut, "/api/auth/profile", strings.NewReader(`{"nickname":"new"}`))
+	request = request.WithContext(context.WithValue(request.Context(), userContextKey{}, int64(1)))
+	response := httptest.NewRecorder()
+
+	auth.UpdateProfile(response, request)
+
+	if response.Code != http.StatusNotImplemented {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}

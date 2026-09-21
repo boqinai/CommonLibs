@@ -25,7 +25,7 @@ var (
 type Option func(*Server)
 
 func WithTokenExpiry(expiry time.Duration) Option { return func(s *Server) { s.tokenExpiry = expiry } }
-func WithBcryptCost(cost int) Option               { return func(s *Server) { s.bcryptCost = cost } }
+func WithBcryptCost(cost int) Option              { return func(s *Server) { s.bcryptCost = cost } }
 func WithDatabaseTimeout(timeout time.Duration) Option {
 	return func(s *Server) { s.databaseTimeout = timeout }
 }
@@ -225,28 +225,32 @@ func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.dbContext(r.Context())
 	defer cancel()
-	user, err := s.store.GetUserByID(ctx, id)
+	var nickname *string
+	if input.Nickname != nil {
+		value := strings.TrimSpace(*input.Nickname)
+		nickname = &value
+	}
+	var avatar *string
+	if input.Avatar != nil {
+		value := strings.TrimSpace(*input.Avatar)
+		avatar = &value
+	}
+	if (nickname != nil && len(*nickname) > 64) ||
+		(avatar != nil && len(*avatar) > 256) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "nickname must be <= 64 bytes and avatar <= 256 bytes")
+		return
+	}
+	profileStore, ok := s.store.(UserProfileStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "profile_not_supported", "user store does not support profiles")
+		return
+	}
+	user, err := profileStore.UpdateProfile(ctx, id, nickname, avatar)
 	if errors.Is(err, ErrUserNotFound) {
 		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
-		return
-	}
-	nickname := user.Nickname
-	if input.Nickname != nil {
-		nickname = strings.TrimSpace(*input.Nickname)
-	}
-	avatar := user.Avatar
-	if input.Avatar != nil {
-		avatar = strings.TrimSpace(*input.Avatar)
-	}
-	if len(nickname) > 64 || len(avatar) > 256 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "nickname must be <= 64 bytes and avatar <= 256 bytes")
-		return
-	}
-	if err := s.store.UpdateProfile(ctx, id, nickname, avatar); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to update profile")
 		return
 	}
@@ -255,8 +259,8 @@ func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		"profile": map[string]any{
 			"id":       id,
 			"phone":    user.Phone,
-			"nickname": nickname,
-			"avatar":   avatar,
+			"nickname": user.Nickname,
+			"avatar":   user.Avatar,
 		},
 	})
 }

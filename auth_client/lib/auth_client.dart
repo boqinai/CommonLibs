@@ -32,7 +32,7 @@ class UserProfile {
     required this.id,
     required this.phone,
     this.nickname = '',
-    this.avatar = '',
+    this.avatar = '0',
   });
 
   final int id;
@@ -41,13 +41,31 @@ class UserProfile {
   final String avatar;
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
+    final rawId = json['id'];
+    final id = rawId is int
+        ? rawId
+        : rawId is num && rawId.isFinite && rawId == rawId.toInt()
+        ? rawId.toInt()
+        : null;
+    final phone = json['phone'];
+    final nickname = json['nickname'];
+    final avatar = json['avatar'];
+    if (id == null ||
+        id <= 0 ||
+        phone is! String ||
+        phone.isEmpty ||
+        (nickname != null && nickname is! String) ||
+        (avatar != null && avatar is! String)) {
+      throw const AuthException(
+        '用户资料响应格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
     return UserProfile(
-      id: json['id'] is int
-          ? json['id'] as int
-          : (json['id'] is num ? (json['id'] as num).toInt() : 0),
-      phone: json['phone'] as String? ?? '',
-      nickname: json['nickname'] as String? ?? '',
-      avatar: json['avatar']?.toString() ?? '',
+      id: id,
+      phone: phone,
+      nickname: nickname as String? ?? '',
+      avatar: avatar as String? ?? '0',
     );
   }
 
@@ -287,10 +305,7 @@ class AuthClient {
   }
 
   Future<UserProfile> updateProfile({String? nickname, String? avatar}) async {
-    final body = <String, dynamic>{
-      'nickname': ?nickname,
-      'avatar': ?avatar,
-    };
+    final body = <String, dynamic>{'nickname': ?nickname, 'avatar': ?avatar};
     final data = await _request(
       'PUT',
       '$authPath/profile',
@@ -301,7 +316,10 @@ class AuthClient {
         data['profile'] is Map<String, dynamic>) {
       return UserProfile.fromJson(data['profile'] as Map<String, dynamic>);
     }
-    return currentUserProfile();
+    throw const AuthException(
+      '更新用户资料响应格式错误',
+      code: AuthErrorCode.invalidResponse,
+    );
   }
 
   Future<dynamic> authenticatedRequest(
@@ -424,7 +442,7 @@ class AuthClient {
           }
         }
         if (authenticated && response.statusCode == 401) await logout();
-        final responseBody = utf8.decode(response.bodyBytes);
+        final responseBody = _decodeResponseBody(response);
         final error = _decodeError(responseBody);
         throw AuthException(
           error.message,
@@ -432,7 +450,7 @@ class AuthClient {
           statusCode: response.statusCode,
         );
       }
-      final responseBody = utf8.decode(response.bodyBytes);
+      final responseBody = _decodeResponseBody(response);
       if (responseBody.trim().isEmpty) return <String, dynamic>{};
       try {
         return jsonDecode(responseBody);
@@ -479,6 +497,18 @@ class AuthClient {
 
   static bool _isLoopback(String host) =>
       host == 'localhost' || host == '127.0.0.1' || host == '::1';
+
+  static String _decodeResponseBody(http.Response response) {
+    try {
+      return utf8.decode(response.bodyBytes);
+    } on FormatException catch (error) {
+      throw AuthException(
+        '认证响应不是有效的 UTF-8: $error',
+        code: AuthErrorCode.invalidResponse,
+        statusCode: response.statusCode,
+      );
+    }
+  }
 
   static ({String message, String? code}) _decodeError(String body) {
     final text = body.trim();
