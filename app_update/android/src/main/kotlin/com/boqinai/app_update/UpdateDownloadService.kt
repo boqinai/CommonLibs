@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -33,9 +34,16 @@ class UpdateDownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            notifications.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "应用更新", NotificationManager.IMPORTANCE_LOW),
-            )
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "应用更新",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = "应用更新下载进度"
+                setSound(null, null)
+                enableVibration(false)
+            }
+            notifications.createNotificationChannel(channel)
         }
     }
 
@@ -117,10 +125,11 @@ class UpdateDownloadService : Service() {
                 connectTimeout = 15_000
                 readTimeout = 30_000
                 instanceFollowRedirects = true
+                setRequestProperty("Accept-Encoding", "identity")
                 connect()
             }
             check(connection.responseCode in 200..299) { "HTTP ${connection.responseCode}" }
-            val total = connection.contentLengthLong.coerceAtLeast(0)
+            val total = (if (connection.contentLengthLong > 0) connection.contentLengthLong else (expectedSize ?: 0L)).coerceAtLeast(0)
             if (expectedSize != null && total > 0) {
                 check(total == expectedSize) { "APK size mismatch" }
             }
@@ -176,11 +185,17 @@ class UpdateDownloadService : Service() {
                 partial.delete()
             }
             save(id, STATUS_SUCCESSFUL, downloaded, total)
-            show(id, buildNotification(version, downloaded, total, "下载完成 100%", false))
+            show(id, buildNotification(version, downloaded, total, "下载完成 100%", false, destination))
         } catch (_: Exception) {
             partial.delete()
             if (cancelled.get()) {
                 clear(id)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
                 notifications.cancel(notificationId(id))
             } else {
                 save(id, STATUS_FAILED, 0, 0)
@@ -188,14 +203,25 @@ class UpdateDownloadService : Service() {
             }
         } finally {
             connection?.disconnect()
+            val wasCancelled = cancelled.get()
             cancellations.remove(id)
             activeDownloadId.compareAndSet(id, NO_ACTIVE_DOWNLOAD)
             if (cancellations.isEmpty()) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_DETACH)
+                if (wasCancelled) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
+                    notifications.cancel(notificationId(id))
                 } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(false)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_DETACH)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(false)
+                    }
                 }
                 stopSelf()
             }
@@ -208,8 +234,14 @@ class UpdateDownloadService : Service() {
         total: Long,
         text: String,
         indeterminate: Boolean,
+        destination: File? = null,
     ): Notification {
         val active = text.startsWith("正在") || text.startsWith("等待") || text.startsWith("准备")
+        val contentIntent = if (destination != null && destination.isFile) {
+            installIntent(destination) ?: launchIntent()
+        } else {
+            launchIntent()
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(notificationIcon(active))
             .setContentTitle("${applicationInfo.loadLabel(packageManager)} 更新 v$version")
@@ -221,8 +253,31 @@ class UpdateDownloadService : Service() {
                 if (total > 0) percentage(downloaded, total) else 0,
                 indeterminate,
             )
-            .setContentIntent(launchIntent())
+            .setContentIntent(contentIntent)
             .build()
+    }
+
+    private fun installIntent(apk: File): PendingIntent? {
+        return try {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "${packageName}.app_update.fileprovider",
+                apk,
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        } catch (_: Exception) {
+            launchIntent()
+        }
     }
 
     private fun launchIntent(): PendingIntent? {
@@ -256,6 +311,12 @@ class UpdateDownloadService : Service() {
     private fun cancelInternal(id: Long) {
         cancellations[id]?.set(true)
         clear(id)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         notifications.cancel(notificationId(id))
     }
 

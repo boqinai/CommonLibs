@@ -299,6 +299,24 @@ class AppUpdateService {
             onFailure,
           );
         }
+        try {
+          final progress = await _platform.invokeMapMethod<String, dynamic>(
+            'getDownloadProgress',
+            {'downloadId': activeDownloadId},
+          );
+          final status = progress?['status'] as int?;
+          if (status != null && (status == 1 || status == 2 || status == 4)) {
+            return await _pollDownload(
+              activeDownloadId,
+              filePath,
+              downloadTimeout,
+              inactivityTimeout,
+              onProgress,
+              onDownloaded,
+              onFailure,
+            );
+          }
+        } catch (_) {}
         await _cancelQuietly(activeDownloadId);
         onFailure?.call(
           const UpdateFailure(UpdateFailureCode.timedOut, 'APK 下载超时'),
