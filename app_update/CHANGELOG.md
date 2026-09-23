@@ -1,3 +1,7 @@
+## 0.8.2
+
+- Show the Android foreground-service download notification immediately so short downloads are visible in the notification shade.
+
 ## 0.8.0
 
 - Check existing local APK MD5, SHA-256 and size before downloading to avoid duplicate downloads.
@@ -42,4 +46,3 @@
 
 - Extract shared update-center protocol handling.
 - Add Android DownloadManager download, progress, cancellation, and APK installation.
-

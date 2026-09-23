@@ -247,6 +247,7 @@ class UpdateDownloadService : Service() {
             .setContentTitle("${applicationInfo.loadLabel(packageManager)} 更新 v$version")
             .setContentText(text)
             .setOnlyAlertOnce(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setOngoing(active)
             .setProgress(
                 if (total > 0) 100 else 0,
