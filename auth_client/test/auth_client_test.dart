@@ -18,6 +18,7 @@ void main() {
   tearDown(() => temp.delete(recursive: true));
 
   test('login persists token and authenticated requests use it', () async {
+    var authenticatedRequests = 0;
     final client = AuthClient(
       baseUrl: 'https://example.test/product/',
       tokenStore: store,
@@ -25,15 +26,25 @@ void main() {
         if (request.url.path.endsWith('/login')) {
           expect(request.url.path, '/product/api/auth/login');
           expect(request.body, contains('13800000000'));
-          return http.Response('{"token":"jwt"}', 200);
+          return http.Response(
+            '{"token":"jwt","user":{"id":7,"phone":"13800000000",'
+            '"nickname":"棋友","avatar":"2"}}',
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
         }
+        authenticatedRequests++;
         expect(request.headers['Authorization'], 'Bearer jwt');
         return http.Response('{"id":7,"phone":"13800000000"}', 200);
       }),
     );
 
     expect(await client.login(' 13800000000 ', '123456'), 'jwt');
+    expect(client.profile?.nickname, '棋友');
+    expect((await client.currentUserProfile()).avatar, '2');
+    expect(authenticatedRequests, 0);
     expect((await client.currentUser())['id'], 7);
+    expect(authenticatedRequests, 1);
     expect(await store.read(), 'jwt');
   });
 
@@ -158,6 +169,7 @@ void main() {
     await client.logout();
 
     expect(client.isLoggedIn, isFalse);
+    expect(client.profile, isNull);
     expect(await store.read(), isNull);
   });
 

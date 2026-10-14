@@ -1,3 +1,9 @@
+## 0.12.0
+
+- Parse and cache the user profile returned alongside the login token.
+- Reuse the cached profile after login and keep it synchronized after profile updates.
+- Keep compatibility with legacy login responses that only contain a token.
+
 ## 0.11.1
 
 - Validate profile payloads and classify invalid UTF-8 responses as `invalid_response`.

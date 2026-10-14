@@ -65,9 +65,20 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	}
 
 	login := call("POST", "/api/auth/login", "", `{"phone":"13800000000","password":"123456"}`)
-	var session struct{ Token string }
+	var session struct {
+		Token string `json:"token"`
+		User  struct {
+			ID       int64  `json:"id"`
+			Phone    string `json:"phone"`
+			Nickname string `json:"nickname"`
+			Avatar   string `json:"avatar"`
+		} `json:"user"`
+	}
 	if login.Code != http.StatusOK || json.Unmarshal(login.Body.Bytes(), &session) != nil || session.Token == "" {
 		t.Fatalf("login: %d %s", login.Code, login.Body.String())
+	}
+	if session.User.ID == 0 || session.User.Phone != "13800000000" || session.User.Avatar != "0" {
+		t.Fatalf("login user: %+v", session.User)
 	}
 	meRes := call("GET", "/api/auth/me", session.Token, "")
 	if meRes.Code != http.StatusOK {

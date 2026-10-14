@@ -170,7 +170,10 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "token creation failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": signed})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token": signed,
+		"user":  userJSON(user),
+	})
 }
 
 func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
@@ -194,12 +197,7 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":       id,
-		"phone":    user.Phone,
-		"nickname": user.Nickname,
-		"avatar":   user.Avatar,
-	})
+	writeJSON(w, http.StatusOK, userJSON(user))
 }
 
 func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -332,4 +330,13 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]string{"code": code, "message": message})
+}
+
+func userJSON(user *User) map[string]any {
+	return map[string]any{
+		"id":       user.ID,
+		"phone":    user.Phone,
+		"nickname": user.Nickname,
+		"avatar":   user.Avatar,
+	}
 }

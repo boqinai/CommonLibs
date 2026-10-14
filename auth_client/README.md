@@ -1,5 +1,7 @@
 # auth_client
 
+新版登录响应为 `{ "token": "...", "user": { ... } }`。登录成功后可通过 `client.profile` 同步读取缓存资料，或调用 `currentUserProfile()`；已有缓存时不会再次请求 `/me`，传入 `forceRefresh: true` 可强制刷新。客户端仍兼容旧服务端仅返回 `token` 的响应。
+
 Boqinai Flutter 应用共用的手机号/密码认证客户端。
 
 Token 默认保存在系统安全存储（Android Keystore 加密存储、Apple Keychain）中。仅测试或低安全场景才显式传入文件型 `TokenStore`。Android 最低 API 23；各平台配置见

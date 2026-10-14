@@ -236,8 +236,10 @@ class AuthClient {
   Future<String?>? _activeRefresh;
   int _authGeneration = 0;
   String? _token;
+  UserProfile? _profile;
 
   String? get token => _token;
+  UserProfile? get profile => _profile;
   bool get isLoggedIn => _token?.isNotEmpty == true;
   Stream<bool> get onAuthStateChanged => _authStateController.stream;
   Map<String, String> get authorizationHeaders => isLoggedIn
@@ -265,9 +267,21 @@ class AuthClient {
         code: AuthErrorCode.invalidResponse,
       );
     }
+    UserProfile? profile;
+    final rawUser = data['user'];
+    if (rawUser != null) {
+      if (rawUser is! Map<String, dynamic>) {
+        throw const AuthException(
+          '登录响应中的用户资料格式错误',
+          code: AuthErrorCode.invalidResponse,
+        );
+      }
+      profile = UserProfile.fromJson(rawUser);
+    }
     await _tokenStore.write(token);
     _authGeneration++;
     _token = token;
+    _profile = profile;
     _authStateController.add(true);
     return token;
   }
@@ -275,10 +289,11 @@ class AuthClient {
   Future<String?> restore({bool validate = false}) async {
     _authGeneration++;
     _token = await _tokenStore.read();
+    _profile = null;
     _authStateController.add(isLoggedIn);
     if (!isLoggedIn || !validate) return _token;
     try {
-      await currentUser();
+      await currentUserProfile(forceRefresh: true);
       return _token;
     } on AuthException catch (error) {
       if (error.isNetworkFailure) return _token;
@@ -299,9 +314,12 @@ class AuthClient {
     return data;
   }
 
-  Future<UserProfile> currentUserProfile() async {
+  Future<UserProfile> currentUserProfile({bool forceRefresh = false}) async {
+    if (!forceRefresh && _profile != null) return _profile!;
     final data = await currentUser();
-    return UserProfile.fromJson(data);
+    final profile = UserProfile.fromJson(data);
+    _profile = profile;
+    return profile;
   }
 
   Future<UserProfile> updateProfile({String? nickname, String? avatar}) async {
@@ -314,7 +332,11 @@ class AuthClient {
     );
     if (data is Map<String, dynamic> &&
         data['profile'] is Map<String, dynamic>) {
-      return UserProfile.fromJson(data['profile'] as Map<String, dynamic>);
+      final profile = UserProfile.fromJson(
+        data['profile'] as Map<String, dynamic>,
+      );
+      _profile = profile;
+      return profile;
     }
     throw const AuthException(
       '更新用户资料响应格式错误',
@@ -346,6 +368,7 @@ class AuthClient {
   Future<void> logout() async {
     _authGeneration++;
     _token = null;
+    _profile = null;
     await _tokenStore.clear();
     _authStateController.add(false);
   }
