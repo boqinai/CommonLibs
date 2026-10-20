@@ -180,7 +180,8 @@ class AppUpdateService {
         expectedSha256 == null ||
         RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(expectedSha256);
     final validMd5 =
-        expectedMd5 == null || RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(expectedMd5);
+        expectedMd5 == null ||
+        RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(expectedMd5);
     if (!_supportsAndroid ||
         !_isHttpUrl(downloadUrl) ||
         version.isEmpty ||
@@ -241,9 +242,7 @@ class AppUpdateService {
           return await openApk(filePath);
         }
         if (status == 16) {
-          onFailure?.call(
-            const UpdateFailure(UpdateFailureCode.downloadFailed, 'APK 下载失败'),
-          );
+          onFailure?.call(_nativeFailure(raw));
           return false;
         }
         onProgress?.call(
@@ -388,10 +387,7 @@ class AppUpdateService {
         return openApk(filePath);
       }
       if (status == 16) {
-        onFailure?.call(
-          const UpdateFailure(UpdateFailureCode.downloadFailed, 'APK 下载失败'),
-        );
-        await _cancelQuietly(downloadId);
+        onFailure?.call(_nativeFailure(progress));
         return false;
       }
       onProgress?.call(
@@ -417,6 +413,17 @@ class AppUpdateService {
       debugPrint('打开 APK 失败: $error');
       return false;
     }
+  }
+
+  static UpdateFailure _nativeFailure(Map<dynamic, dynamic> progress) {
+    final errorCode = progress['errorCode']?.toString();
+    final message = progress['errorMessage']?.toString();
+    return UpdateFailure(
+      errorCode == 'data_sync_timeout'
+          ? UpdateFailureCode.timedOut
+          : UpdateFailureCode.downloadFailed,
+      message == null || message.isEmpty ? 'APK 下载失败' : message,
+    );
   }
 
   Future<bool> cancelDownload(int downloadId) async {

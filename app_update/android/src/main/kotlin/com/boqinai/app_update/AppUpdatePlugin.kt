@@ -232,8 +232,13 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         }
         try {
             val apk = File(path)
-            if (!apk.isFile) {
-                result.error("file_not_found", "Downloaded APK does not exist", null)
+            val validation = ApkInstallValidator.validate(context, apk)
+            if (!validation.valid) {
+                result.error(
+                    validation.code ?: "invalid_apk",
+                    validation.message ?: "APK validation failed",
+                    null,
+                )
                 return
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&

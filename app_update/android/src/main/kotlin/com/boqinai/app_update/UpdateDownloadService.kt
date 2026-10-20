@@ -30,6 +30,9 @@ class UpdateDownloadService : Service() {
 
     private val executor = Executors.newSingleThreadExecutor()
     private val cancellations = ConcurrentHashMap<Long, AtomicBoolean>()
+    private val startIds = ConcurrentHashMap<Long, Int>()
+    private val versions = ConcurrentHashMap<Long, String>()
+    private val timedOut = ConcurrentHashMap.newKeySet<Long>()
 
     override fun onCreate() {
         super.onCreate()
@@ -49,7 +52,7 @@ class UpdateDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_DOWNLOAD -> begin(intent)
+            ACTION_DOWNLOAD -> begin(intent, startId)
             ACTION_CANCEL -> cancelInternal(intent.getLongExtra(EXTRA_ID, -1))
         }
         return START_NOT_STICKY
@@ -63,7 +66,33 @@ class UpdateDownloadService : Service() {
         super.onDestroy()
     }
 
-    private fun begin(intent: Intent) {
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
+        val id = startIds.entries.firstOrNull { it.value == startId }?.key ?: return
+        timedOut.add(id)
+        cancellations[id]?.set(true)
+        val current = states[id]
+        val downloaded = current?.get("bytesDownloaded") as? Long ?: 0L
+        val total = current?.get("totalBytes") as? Long ?: 0L
+        save(
+            id,
+            STATUS_FAILED,
+            downloaded,
+            total,
+            ERROR_DATA_SYNC_TIMEOUT,
+            "Android stopped the dataSync foreground service after its time limit",
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_DETACH)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(false)
+        }
+        show(id, buildNotification(versions[id].orEmpty(), downloaded, total, "下载超时，请重试", false))
+        stopSelf(startId)
+    }
+
+    private fun begin(intent: Intent, startId: Int) {
         val id = intent.getLongExtra(EXTRA_ID, -1)
         val source = intent.getStringExtra(EXTRA_URL) ?: return
         val version = intent.getStringExtra(EXTRA_VERSION).orEmpty()
@@ -74,6 +103,8 @@ class UpdateDownloadService : Service() {
         val expectedSize = intent.getLongExtra(EXTRA_SIZE, -1).takeIf { it >= 0 }
         val cancelled = AtomicBoolean(false)
         cancellations[id] = cancelled
+        startIds[id] = startId
+        versions[id] = version
         save(id, STATUS_PENDING, 0, 0)
         val initialNotification = buildNotification(version, 0, 0, "准备下载…", true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -177,7 +208,21 @@ class UpdateDownloadService : Service() {
             }
             if (digest != null) {
                 val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
-                check(actual.equals(expectedSha256, ignoreCase = true)) { "APK checksum mismatch" }
+                check(actual.equals(expectedHash, ignoreCase = true)) { "APK checksum mismatch" }
+            }
+            val validation = ApkInstallValidator.validate(this, partial)
+            if (!validation.valid) {
+                partial.delete()
+                save(
+                    id,
+                    STATUS_FAILED,
+                    downloaded,
+                    total,
+                    validation.code ?: "invalid_apk",
+                    validation.message ?: "APK validation failed",
+                )
+                show(id, buildNotification(version, downloaded, total, "安装包校验失败", false))
+                return
             }
             if (destination.exists()) destination.delete()
             if (!partial.renameTo(destination)) {
@@ -186,9 +231,11 @@ class UpdateDownloadService : Service() {
             }
             save(id, STATUS_SUCCESSFUL, downloaded, total)
             show(id, buildNotification(version, downloaded, total, "下载完成 100%", false, destination))
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             partial.delete()
-            if (cancelled.get()) {
+            if (timedOut.contains(id)) {
+                // onTimeout has already persisted and published the terminal failure.
+            } else if (cancelled.get()) {
                 clear(id)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -198,16 +245,19 @@ class UpdateDownloadService : Service() {
                 }
                 notifications.cancel(notificationId(id))
             } else {
-                save(id, STATUS_FAILED, 0, 0)
+                save(id, STATUS_FAILED, 0, 0, "download_failed", error.message ?: "Download failed")
                 show(id, buildNotification(version, 0, 0, "下载失败", false))
             }
         } finally {
             connection?.disconnect()
             val wasCancelled = cancelled.get()
+            val wasTimedOut = timedOut.remove(id)
             cancellations.remove(id)
+            startIds.remove(id)
+            versions.remove(id)
             activeDownloadId.compareAndSet(id, NO_ACTIVE_DOWNLOAD)
             if (cancellations.isEmpty()) {
-                if (wasCancelled) {
+                if (wasCancelled && !wasTimedOut) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                     } else {
@@ -260,6 +310,7 @@ class UpdateDownloadService : Service() {
 
     private fun installIntent(apk: File): PendingIntent? {
         return try {
+            if (!ApkInstallValidator.validate(this, apk).valid) return launchIntent()
             val uri = FileProvider.getUriForFile(
                 this,
                 "${packageName}.app_update.fileprovider",
@@ -327,13 +378,22 @@ class UpdateDownloadService : Service() {
     private val notifications: NotificationManager
         get() = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
-    private fun save(id: Long, status: Int, downloaded: Long, total: Long) {
-        val event = mapOf<String, Any>(
+    private fun save(
+        id: Long,
+        status: Int,
+        downloaded: Long,
+        total: Long,
+        errorCode: String? = null,
+        errorMessage: String? = null,
+    ) {
+        val event = mutableMapOf<String, Any>(
             "downloadId" to id,
             "status" to status,
             "bytesDownloaded" to downloaded,
             "totalBytes" to total,
         )
+        errorCode?.let { event["errorCode"] = it }
+        errorMessage?.let { event["errorMessage"] = it }
         states[id] = event
         if (status == STATUS_SUCCESSFUL || status == STATUS_FAILED) {
             preferences.edit()
@@ -341,6 +401,10 @@ class UpdateDownloadService : Service() {
                 .putInt("$id.status", status)
                 .putLong("$id.downloaded", downloaded)
                 .putLong("$id.total", total)
+                .apply {
+                    if (errorCode == null) remove("$id.errorCode") else putString("$id.errorCode", errorCode)
+                    if (errorMessage == null) remove("$id.errorMessage") else putString("$id.errorMessage", errorMessage)
+                }
                 .apply()
         }
         DownloadEventBus.publish(event)
@@ -349,7 +413,8 @@ class UpdateDownloadService : Service() {
     private fun clear(id: Long) {
         states.remove(id)
         preferences.edit().remove("$id.exists").remove("$id.status")
-            .remove("$id.downloaded").remove("$id.total").apply()
+            .remove("$id.downloaded").remove("$id.total")
+            .remove("$id.errorCode").remove("$id.errorMessage").apply()
     }
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES, MODE_PRIVATE) }
@@ -372,6 +437,7 @@ class UpdateDownloadService : Service() {
         private const val STATUS_RUNNING = 2
         private const val STATUS_SUCCESSFUL = 8
         private const val STATUS_FAILED = 16
+        private const val ERROR_DATA_SYNC_TIMEOUT = "data_sync_timeout"
         private val nextId = AtomicLong(System.currentTimeMillis())
         private const val NO_ACTIVE_DOWNLOAD = -1L
         private val activeDownloadId = AtomicLong(NO_ACTIVE_DOWNLOAD)
@@ -447,11 +513,14 @@ class UpdateDownloadService : Service() {
             states[id]?.let { return it }
             val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             if (!preferences.getBoolean("$id.exists", false)) return null
-            return mapOf(
+            return mutableMapOf<String, Any>(
                 "status" to preferences.getInt("$id.status", STATUS_PENDING),
                 "bytesDownloaded" to preferences.getLong("$id.downloaded", 0),
                 "totalBytes" to preferences.getLong("$id.total", 0),
-            )
+            ).apply {
+                preferences.getString("$id.errorCode", null)?.let { put("errorCode", it) }
+                preferences.getString("$id.errorMessage", null)?.let { put("errorMessage", it) }
+            }
         }
 
         fun cancel(context: Context, id: Long): Boolean {

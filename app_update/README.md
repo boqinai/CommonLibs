@@ -6,6 +6,7 @@ Boqinai Flutter 应用共用的 Android 应用内更新插件。它统一负责�
 - 自动读取应用包名、`versionCode` 和 Android ID
 - 使用 Android 前台服务后台下载，在单条通知中展示进度条和数字百分比
 - 取消下载，并通过内置 `FileProvider` 打开系统 APK 安装器
+- 安装前统一校验 APK 包名和签名证书链，覆盖应用内与通知栏两条安装入口
 
 插件提供可直接使用的 Material 默认更新弹窗；各 App 仍可自定义文案、交互和自动检查频率。
 
@@ -48,9 +49,11 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 
 下载完成后可通过 `onDownloaded` 保存 APK 路径，授权返回后调用 `openApk(path)` 直接重试安装。`UpdateDownloadController` 会自动保存 `downloadedFilePath`，其 `retry()` 会优先重新打开已下载文件，不会重复下载。
 
-更新协议可选返回 `sha256`（64 位十六进制）和 `file_size`（字节数）。提供后，原生下载服务会在打开安装器前校验 APK 完整性。插件同一时间只允许一个下载任务；重复启动会返回 `download_in_progress`。`downloadTimeout` 限制总下载时长，`inactivityTimeout` 限制两次进度事件之间允许的最长静默时间。
+更新协议可选返回 `sha256`（64 位十六进制）和 `file_size`（字节数）。提供后，原生下载服务会校验 APK 完整性；无论是否提供完整性元数据，原生层都会在下载落盘以及打开安装器前核对 APK 包名与当前应用一致，并核对签名证书或合法的证书轮换链。插件同一时间只允许一个下载任务；重复启动会返回 `download_in_progress`。`downloadTimeout` 限制总下载时长，`inactivityTimeout` 限制两次进度事件之间允许的最长静默时间。
 
-下载失败时可通过 `onFailure` 获取结构化的 `UpdateFailure`；使用 `UpdateDownloadController` 时，可读取其 `failure` 字段展示具体错误原因。
+下载失败时可通过 `onFailure` 获取结构化的 `UpdateFailure`；使用 `UpdateDownloadController` 时，可读取其 `failure` 字段展示具体错误原因。Android 15 对 `dataSync` 前台服务触发系统时限时，插件会持久化 `data_sync_timeout` 失败状态、停止服务并保留失败通知，Dart 侧映射为 `UpdateFailureCode.timedOut`。
+
+发布前仍应在目标 ROM 真机验证未知来源授权返回、下载中进程重建，以及长时间弱网下载。普通 Dart 超时或失败提示不等同于 Android 15 系统前台服务超时处理。
 
 ## 自动检查与下载控制器
 

@@ -186,6 +186,51 @@ void main() {
     expect(installed, isFalse);
     expect(cancelled, isTrue);
   });
+
+  test('preserves native dataSync timeout as a timed-out failure', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    var cancelled = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('app_update'), (
+          call,
+        ) async {
+          if (call.method == 'startDownload') {
+            return {'downloadId': 8, 'filePath': '/tmp/app.apk'};
+          }
+          if (call.method == 'cancelDownload') {
+            cancelled = true;
+            return true;
+          }
+          return {
+            'status': 16,
+            'bytesDownloaded': 5,
+            'totalBytes': 10,
+            'errorCode': 'data_sync_timeout',
+            'errorMessage': 'Android dataSync limit reached',
+          };
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('app_update'), null),
+    );
+    UpdateFailure? failure;
+
+    final installed =
+        await AppUpdateService(
+          updateApiUrl: 'https://api.example.com/update',
+        ).downloadAndInstall(
+          'https://example.com/app.apk',
+          version: '1.1.0',
+          downloadTimeout: const Duration(seconds: 2),
+          onFailure: (value) => failure = value,
+        );
+
+    expect(installed, isFalse);
+    expect(failure?.code, UpdateFailureCode.timedOut);
+    expect(failure?.message, 'Android dataSync limit reached');
+    expect(cancelled, isFalse);
+  });
 }
 
 class _TrackingClient extends http.BaseClient {

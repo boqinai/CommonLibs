@@ -1,3 +1,8 @@
+## 0.9.0
+
+- Validate the APK package name and signing-certificate lineage before marking a download complete or opening either installer entry point.
+- Handle Android 15 dataSync foreground-service timeouts, persist the terminal failure, and surface it as a timed-out download to Dart.
+
 ## 0.8.2
 
 - Show the Android foreground-service download notification immediately so short downloads are visible in the notification shade.
