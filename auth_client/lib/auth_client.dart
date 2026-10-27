@@ -762,10 +762,7 @@ class AuthClient {
   static ({String message, String? code}) _decodeError(String body) {
     final text = body.trim();
     if (text.isEmpty) {
-      return (
-        message: '认证请求失败',
-        code: AuthErrorCode.invalidResponse,
-      );
+      return (message: '认证请求失败', code: AuthErrorCode.invalidResponse);
     }
     try {
       final data = jsonDecode(text);
@@ -777,15 +774,9 @@ class AuthClient {
         }
       }
     } on FormatException {
-      return (
-        message: '认证响应格式错误',
-        code: AuthErrorCode.invalidResponse,
-      );
+      return (message: '认证响应格式错误', code: AuthErrorCode.invalidResponse);
     }
-    return (
-      message: '认证响应格式错误',
-      code: AuthErrorCode.invalidResponse,
-    );
+    return (message: '认证响应格式错误', code: AuthErrorCode.invalidResponse);
   }
 }
 
