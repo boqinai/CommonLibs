@@ -42,7 +42,12 @@ func TestRejectsNonPositiveDurations(t *testing.T) {
 	}
 	defer db.Close()
 
-	for _, option := range []Option{WithTokenExpiry(0), WithDatabaseTimeout(-time.Second)} {
+	for _, option := range []Option{
+		WithTokenExpiry(0),
+		WithTokenExpiry(-time.Second),
+		WithRefreshTokenExpiry(0),
+		WithDatabaseTimeout(-time.Second),
+	} {
 		func() {
 			defer func() {
 				if recover() == nil {

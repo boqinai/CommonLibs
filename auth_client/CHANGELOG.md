@@ -1,3 +1,12 @@
+## 0.15.0
+
+- Persist `refresh_token` via `RefreshTokenStorage` (built-in stores) and, on 401, exchange it at `POST /api/auth/refresh` with the same single-flight and generation checks as `onRefreshToken`. A custom `onRefreshToken` still takes priority.
+- `logout` POSTs `/logout` to revoke the access token and refresh token when `revokeOnLogout` is true (default). Network or server errors do not keep the local session. Set `revokeOnLogout: false` for a client-only logout (auth_server older than 0.11.0).
+- Login responses without `refresh_token` keep working; those sessions are not auto-refreshed.
+- Add `AuthErrorCode.profileNotSupported` and `AuthErrorCode.invalidRefreshToken`. Shared code strings match auth_server and are not renamed.
+
+Breaking for apps that assumed a 30-day access token: ship this with auth_server 0.11.0, or keep a long `WithTokenExpiry` on the server. New access tokens default to 2 hours.
+
 ## 0.14.0
 
 - Expose `lastLoginCreated` after verified-phone login (SMS / fusion) so hosts can tell new registrations apart without parsing raw JSON.

@@ -16,13 +16,24 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 
 | 模块 | Tag 格式 | 示例 |
 | --- | --- | --- |
-| `auth_server` | 斜杠 | `auth_server/v0.10.0` |
-| `auth_client` | 连字符 | `auth_client-v0.14.0` |
-| `fusion_auth` | 连字符 | `fusion_auth-v0.2.0` |
+| `auth_server` | 斜杠 | `auth_server/v0.11.0` |
+| `auth_client` | 连字符 | `auth_client-v0.15.0` |
+| `fusion_auth` | 连字符 | `fusion_auth-v0.3.0` |
 | `app_update` | 连字符 | `app_update-v0.9.1` |
 | `release_tool` | 连字符 | `release_tool-v0.5.0` |
 
 Go 模块用斜杠 Tag（`go get ...@auth_server/vX.Y.Z`）；Flutter 包用连字符 Tag（pub `ref:`）。
+
+## Git LFS
+
+`fusion_auth` 的 Android AAR 和 iOS xcframework 里的 Mach-O 二进制走 Git LFS。贡献者和 CI 必须拉下 LFS 对象，否则这两个文件只是指针文本，原生构建会失败：
+
+```bash
+git lfs install
+git lfs pull
+```
+
+本仓库 GitHub Actions 的 `actions/checkout` 设置了 `lfs: true`。头文件和资源包仍在普通 Git 里。
 
 ## 验证
 

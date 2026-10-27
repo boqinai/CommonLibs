@@ -2,7 +2,33 @@
 
 阿里云号码认证·融合认证（本机号码一键登录）Flutter 插件，支持 Android 与 iOS。
 
-**SDK 版本说明：** Android 发布包 / Maven 坐标为 fusionauth **1.2.16**；AAR 内 `versionName` 仍可能显示更旧的构建号（例如 1.2.8），以文件名与坐标为准。iOS 为 AlicomFusionAuth.xcframework **1.2.15**（最低 iOS 15.0）及其资源包。不集成友盟（SDK 运行时探测，缺失时跳过）。
+## 版本
+
+插件发布版本和阿里云 SDK 的版本不是同一个数。
+
+| 名称 | 版本 |
+| --- | --- |
+| Flutter 包 / Tag | **0.3.0**（`fusion_auth-v0.3.0`，`pubspec.yaml` 的 `version`） |
+| Android 发布标签 | Maven `com.alicom.fusion:fusionauth:1.2.16`，文件 `fusionauth-1.2.16.aar` |
+| AAR 内部 `android:versionName` | **1.2.8**（清单里的旧构建号；判断 SDK 时以文件名和 Maven 坐标 1.2.16 为准） |
+| iOS 发布标签 | AlicomFusionAuth.xcframework **1.2.15** |
+| iOS 框架内 `CFBundleShortVersionString` | **1.2.14**（二进制 Info.plist 比发布标签更旧，同样以 1.2.15 这个投放版本为准） |
+| 插件最低系统 | iOS **15.0**（podspec），Android **minSdk 24** |
+
+AAR 清单自己的 `minSdkVersion` 是 21。插件不把它降到 24 以下。不集成友盟（SDK 运行时探测，缺失时跳过）。
+
+## Git LFS
+
+Android AAR 和 iOS xcframework 里的两份 Mach-O（真机 `ios-arm64`、模拟器 `ios-arm64_x86_64-simulator`）用 Git LFS 存放。头文件、podspec、资源包仍是普通 Git 文件。
+
+克隆仓库的人和 CI 都要取出 LFS 对象，否则这三个文件只是指针，Android / iOS 构建会失败：
+
+```bash
+git lfs install
+git lfs pull
+```
+
+GitHub Actions 必须在 `actions/checkout` 上设置 `lfs: true`（本仓库 `.github/workflows/ci.yml` 已设置，并在 `fusion_auth` job 里检查文件不是 LFS 指针）。没有 LFS 的环境可以跑 Dart 单元测试，但不能链接原生 SDK。
 
 **权限：** 插件 Manifest 移除了 `READ_PHONE_STATE`、`AD_ID`、`RECEIVE_USER_PRESENT`、`CHANGE_WIFI_STATE`、`CHANGE_NETWORK_STATE`；保留 `ACCESS_WIFI_STATE`（运营商检测可能需要）。
 
@@ -21,7 +47,7 @@ dependencies:
   fusion_auth:
     git:
       url: https://github.com/boqinai/CommonLibs.git
-      ref: fusion_auth-v0.2.0
+      ref: fusion_auth-v0.3.0
       path: fusion_auth
 ```
 

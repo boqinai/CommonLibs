@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -25,8 +24,23 @@ var (
 
 type Option func(*Server)
 
+// WithTokenExpiry sets the access-token lifetime. The default is
+// DefaultAccessTokenTTL (2 hours). The value must be positive.
 func WithTokenExpiry(expiry time.Duration) Option { return func(s *Server) { s.tokenExpiry = expiry } }
-func WithBcryptCost(cost int) Option              { return func(s *Server) { s.bcryptCost = cost } }
+
+// WithRefreshTokenExpiry sets the refresh-token lifetime. The default is
+// DefaultRefreshTokenTTL (30 days). The value must be positive.
+func WithRefreshTokenExpiry(expiry time.Duration) Option {
+	return func(s *Server) { s.refreshExpiry = expiry }
+}
+
+// WithTokenBlacklist sets the jti revocation store. Nil uses
+// MemoryTokenBlacklist, which is process-local and needs no database.
+// Multi-instance deployments must pass a shared store.
+func WithTokenBlacklist(blacklist TokenBlacklist) Option {
+	return func(s *Server) { s.blacklist = blacklist }
+}
+func WithBcryptCost(cost int) Option { return func(s *Server) { s.bcryptCost = cost } }
 func WithDatabaseTimeout(timeout time.Duration) Option {
 	return func(s *Server) { s.databaseTimeout = timeout }
 }
@@ -63,10 +77,13 @@ type Server struct {
 	secret          []byte
 	dummyHash       []byte
 	tokenExpiry     time.Duration
+	refreshExpiry   time.Duration
+	blacklist       TokenBlacklist
 	bcryptCost      int
 	databaseTimeout time.Duration
 	registerLimiter *RateLimiter
 	loginLimiter    *RateLimiter
+	refreshLimiter  *RateLimiter
 	phoneValidator  *regexp.Regexp
 	minPasswordLen  int
 }
@@ -95,11 +112,13 @@ func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server 
 	server := &Server{
 		store:           store,
 		secret:          append([]byte(nil), jwtSecret...),
-		tokenExpiry:     30 * 24 * time.Hour,
+		tokenExpiry:     DefaultAccessTokenTTL,
+		refreshExpiry:   DefaultRefreshTokenTTL,
 		bcryptCost:      bcrypt.DefaultCost,
 		databaseTimeout: 5 * time.Second,
 		registerLimiter: NewRateLimiter(20, time.Hour),
 		loginLimiter:    NewRateLimiter(30, 10*time.Minute),
+		refreshLimiter:  NewRateLimiter(60, 10*time.Minute),
 		minPasswordLen:  8,
 	}
 	for _, option := range options {
@@ -107,6 +126,12 @@ func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server 
 	}
 	if server.tokenExpiry <= 0 {
 		panic("authserver: token expiry must be positive")
+	}
+	if server.refreshExpiry <= 0 {
+		panic("authserver: refresh token expiry must be positive")
+	}
+	if server.blacklist == nil {
+		server.blacklist = NewMemoryTokenBlacklist()
 	}
 	if server.databaseTimeout <= 0 {
 		panic("authserver: database timeout must be positive")
@@ -136,6 +161,8 @@ func (s *Server) Init(ctx context.Context) error {
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/auth/register", maybeLimited(s.registerLimiter, http.HandlerFunc(s.Register)))
 	mux.Handle("/api/auth/login", maybeLimited(s.loginLimiter, http.HandlerFunc(s.Login)))
+	mux.Handle("/api/auth/refresh", maybeLimited(s.refreshLimiter, http.HandlerFunc(s.Refresh)))
+	mux.Handle("/api/auth/logout", http.HandlerFunc(s.Logout))
 	mux.Handle("/api/auth/me", s.RequireAuth(http.HandlerFunc(s.Me)))
 	mux.Handle("/api/auth/profile", s.RequireAuth(http.HandlerFunc(s.UpdateProfile)))
 }
@@ -149,7 +176,7 @@ func maybeLimited(l *RateLimiter, next http.Handler) http.Handler {
 
 func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	phone, password, ok := s.credentials(w, r)
@@ -160,25 +187,25 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	exists, err := s.store.UserExists(ctx, phone)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "registration failed")
 		return
 	}
 	if exists {
-		writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
+		writeError(w, http.StatusConflict, CodePhoneAlreadyRegistered, "phone already registered")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.bcryptCost)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "password hashing failed")
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "password hashing failed")
 		return
 	}
 	_, err = s.store.CreateUser(ctx, phone, string(hash))
 	if err != nil {
 		if exists, _ := s.store.UserExists(ctx, phone); exists {
-			writeError(w, http.StatusConflict, "phone_already_registered", "phone already registered")
+			writeError(w, http.StatusConflict, CodePhoneAlreadyRegistered, "phone already registered")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal_error", "registration failed")
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "registration failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
@@ -186,7 +213,7 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	phone, password, ok := s.credentials(w, r)
@@ -201,52 +228,36 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		hash = user.PasswordHash
 	}
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
-		writeError(w, http.StatusInternalServerError, "internal_error", "login failed")
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "login failed")
 		return
 	}
 	passwordError := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	if errors.Is(err, ErrUserNotFound) || passwordError != nil {
-		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid phone or password")
+		writeError(w, http.StatusUnauthorized, CodeInvalidCredentials, "invalid phone or password")
 		return
 	}
-	signed, err := s.IssueToken(user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "token creation failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token": signed,
-		"user":  userJSON(user),
-	})
-}
-
-// IssueToken signs an HS256 JWT (sub = user id) accepted by RequireAuth.
-func (s *Server) IssueToken(userID int64) (string, error) {
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": strconv.FormatInt(userID, 10),
-		"exp": time.Now().Add(s.tokenExpiry).Unix(),
-	}).SignedString(s.secret)
+	s.writeAuthSession(w, user, nil)
 }
 
 func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	id, ok := UserID(r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, CodeUnauthorized, "unauthorized")
 		return
 	}
 	ctx, cancel := s.dbContext(r.Context())
 	defer cancel()
 	user, err := s.store.GetUserByID(ctx, id)
 	if errors.Is(err, ErrUserNotFound) {
-		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
+		writeError(w, http.StatusNotFound, CodeUserNotFound, "user not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "user lookup failed")
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "user lookup failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, userJSON(user))
@@ -254,12 +265,12 @@ func (s *Server) Me(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut && r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	id, ok := UserID(r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		writeError(w, http.StatusUnauthorized, CodeUnauthorized, "unauthorized")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -270,7 +281,7 @@ func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request")
+		writeError(w, http.StatusBadRequest, CodeInvalidRequest, "invalid request")
 		return
 	}
 	ctx, cancel := s.dbContext(r.Context())
@@ -287,21 +298,21 @@ func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if (nickname != nil && len(*nickname) > 64) ||
 		(avatar != nil && len(*avatar) > 256) {
-		writeError(w, http.StatusBadRequest, "invalid_request", "nickname must be <= 64 bytes and avatar <= 256 bytes")
+		writeError(w, http.StatusBadRequest, CodeInvalidRequest, "nickname must be <= 64 bytes and avatar <= 256 bytes")
 		return
 	}
 	profileStore, ok := s.store.(UserProfileStore)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, "profile_not_supported", "user store does not support profiles")
+		writeError(w, http.StatusNotImplemented, CodeProfileNotSupported, "user store does not support profiles")
 		return
 	}
 	user, err := profileStore.UpdateProfile(ctx, id, nickname, avatar)
 	if errors.Is(err, ErrUserNotFound) {
-		writeError(w, http.StatusNotFound, "user_not_found", "user not found")
+		writeError(w, http.StatusNotFound, CodeUserNotFound, "user not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to update profile")
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to update profile")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -317,9 +328,9 @@ func (s *Server) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, err := s.authenticate(r.Header.Get("Authorization"))
+		id, err := s.authenticate(r.Context(), r.Header.Get("Authorization"))
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+			writeError(w, http.StatusUnauthorized, CodeUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey{}, id)))
@@ -331,26 +342,6 @@ func UserID(r *http.Request) (int64, bool) {
 	return id, ok
 }
 
-func (s *Server) authenticate(header string) (int64, error) {
-	scheme, tokenText, found := strings.Cut(header, " ")
-	if !found || !strings.EqualFold(scheme, "Bearer") {
-		return 0, ErrMissingBearerToken
-	}
-	token, err := jwt.Parse(
-		strings.TrimSpace(tokenText),
-		func(*jwt.Token) (any, error) { return s.secret, nil },
-		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
-	)
-	if err != nil || !token.Valid {
-		return 0, ErrInvalidToken
-	}
-	subject, err := token.Claims.GetSubject()
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(subject, 10, 64)
-}
-
 func (s *Server) credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var input struct {
@@ -360,7 +351,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request) (string, st
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request")
+		writeError(w, http.StatusBadRequest, CodeInvalidRequest, "invalid request")
 		return "", "", false
 	}
 	input.Phone = strings.TrimSpace(input.Phone)
@@ -375,7 +366,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request) (string, st
 		phoneOK = len(input.Phone) >= 6 && len(input.Phone) <= 32
 	}
 	if !phoneOK || len(input.Password) < minPass || len(input.Password) > 72 {
-		writeError(w, http.StatusBadRequest, "invalid_credentials_format",
+		writeError(w, http.StatusBadRequest, CodeInvalidCredentialsFormat,
 			"phone format invalid and password must contain "+strconv.Itoa(minPass)+"-72 bytes")
 		return "", "", false
 	}
