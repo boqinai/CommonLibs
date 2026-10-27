@@ -59,3 +59,15 @@ final auth = AuthClient(
 ```
 
 首次读取成功后旧 Token 会写入安全存储并从旧位置删除。
+
+## 短信验证码 / 本机号码一键登录（0.13.0，需 auth_server ≥ 0.9.0）
+
+```dart
+final cooldown = await auth.sendSmsCode(phone);    // 返回重发冷却秒数（默认 60）
+await auth.loginWithSmsCode(phone, code);           // 未注册时自动注册
+
+final init = await auth.fusionAuthToken('android'); // {"token","schemeCode",...}，交给 fusion_auth 插件
+await auth.loginWithFusionToken(verifyToken);       // SDK 回调的统一认证 Token
+```
+
+错误使用 `AuthErrorCode.invalidPhone`、`verificationFailed`、`smsTooFrequent`、`smsDailyLimit`、`tooManyRequests`、`smsUnavailable`、`verificationUnavailable` 翻译。UI（倒计时、协议勾选、一键登录失败回退到验证码表单）由各 App 自行实现。

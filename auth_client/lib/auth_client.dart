@@ -122,6 +122,14 @@ abstract final class AuthErrorCode {
   static const internalError = 'internal_error';
   static const invalidResponse = 'invalid_response';
   static const networkFailure = 'network_failure';
+  static const invalidPhone = 'invalid_phone';
+  static const verificationFailed = 'verification_failed';
+  static const smsTooFrequent = 'sms_too_frequent';
+  static const smsDailyLimit = 'sms_daily_limit';
+  static const tooManyRequests = 'too_many_requests';
+  static const smsUnavailable = 'sms_unavailable';
+  static const verificationUnavailable = 'verification_unavailable';
+  static const unsupportedPlatform = 'unsupported_platform';
 }
 
 abstract interface class TokenStorage {
@@ -260,6 +268,58 @@ class AuthClient {
       '$authPath/login',
       body: {'phone': phone.trim(), 'password': password},
     );
+    return _acceptLogin(data);
+  }
+
+  /// Requests an SMS code (auth_server >= 0.9.0); returns the resend
+  /// cooldown in seconds.
+  Future<int> sendSmsCode(String phone) async {
+    final data = await _request(
+      'POST',
+      '$authPath/sms/send',
+      body: {'phone': phone.trim()},
+    );
+    final cooldown = data is Map<String, dynamic> ? data['cooldown'] : null;
+    return cooldown is int && cooldown > 0 ? cooldown : 60;
+  }
+
+  /// Logs in (registering if needed) with an SMS code.
+  Future<String> loginWithSmsCode(String phone, String code) async {
+    final data = await _request(
+      'POST',
+      '$authPath/sms/login',
+      body: {'phone': phone.trim(), 'code': code.trim()},
+    );
+    return _acceptLogin(data);
+  }
+
+  /// Fetches the fusion-auth SDK init payload for `android` or `ios`.
+  Future<Map<String, dynamic>> fusionAuthToken(String platform) async {
+    final data = await _request(
+      'POST',
+      '$authPath/fusion/token',
+      body: {'platform': platform},
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const AuthException(
+        '一键登录配置格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
+    return data;
+  }
+
+  /// Logs in (registering if needed) with the fusion SDK's verify token.
+  Future<String> loginWithFusionToken(String verifyToken) async {
+    final data = await _request(
+      'POST',
+      '$authPath/fusion/login',
+      body: {'token': verifyToken},
+    );
+    return _acceptLogin(data);
+  }
+
+  Future<String> _acceptLogin(dynamic data) async {
     final token = data is Map<String, dynamic> ? data['token'] : null;
     if (token is! String || token.isEmpty) {
       throw const AuthException(

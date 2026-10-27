@@ -1,0 +1,26 @@
+name: fusion_auth
+description: Aliyun 融合认证 (fusion auth / 本机号码一键登录) bridge for Boqinai Flutter apps (Android and iOS).
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+  flutter: '>=3.35.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.boqinai.fusionauth
+        pluginClass: FusionAuthPlugin
+      ios:
+        pluginClass: FusionAuthPlugin

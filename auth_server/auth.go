@@ -161,11 +161,7 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid phone or password")
 		return
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": strconv.FormatInt(user.ID, 10),
-		"exp": time.Now().Add(s.tokenExpiry).Unix(),
-	})
-	signed, err := token.SignedString(s.secret)
+	signed, err := s.IssueToken(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "token creation failed")
 		return
@@ -174,6 +170,14 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		"token": signed,
 		"user":  userJSON(user),
 	})
+}
+
+// IssueToken signs an HS256 JWT (sub = user id) accepted by RequireAuth.
+func (s *Server) IssueToken(userID int64) (string, error) {
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": strconv.FormatInt(userID, 10),
+		"exp": time.Now().Add(s.tokenExpiry).Unix(),
+	}).SignedString(s.secret)
 }
 
 func (s *Server) Me(w http.ResponseWriter, r *http.Request) {

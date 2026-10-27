@@ -1,3 +1,8 @@
+## 0.13.0
+
+- Add verified-phone login against auth_server >= 0.9.0: `sendSmsCode`, `loginWithSmsCode`, `fusionAuthToken`, `loginWithFusionToken`.
+- Add error codes for SMS / fusion login (`invalid_phone`, `verification_failed`, `sms_too_frequent`, `sms_daily_limit`, `too_many_requests`, `sms_unavailable`, `verification_unavailable`, `unsupported_platform`).
+
 ## 0.12.0
 
 - Parse and cache the user profile returned alongside the login token.

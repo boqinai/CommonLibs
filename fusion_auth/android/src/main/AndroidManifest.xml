@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- 一键登录不需要读取电话状态，移除 SDK 合并进来的敏感权限。 -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
+    <!-- 不集成友盟，移除其 Google 广告 ID 权限。 -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+</manifest>
