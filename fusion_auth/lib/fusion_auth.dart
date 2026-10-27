@@ -21,17 +21,42 @@ class FusionVerifyResult {
   bool get ok => verifyToken != null && verifyToken!.isNotEmpty;
 }
 
+/// Called when the native SDK asks for a fresh 鉴权Token (typically after
+/// ~3600s). Return a new token from the host server, or null to keep using
+/// the token passed to [FusionAuth.start].
+typedef FusionTokenUpdater = Future<String?> Function();
+
 class FusionAuth {
   FusionAuth._();
   static const channel = MethodChannel('boqinai/fusion_auth');
+  static FusionTokenUpdater? onTokenUpdate;
+  static bool _handlerBound = false;
+
+  static void _ensureHandler() {
+    if (_handlerBound) return;
+    _handlerBound = true;
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'onTokenUpdate') {
+        final updater = onTokenUpdate;
+        if (updater == null) return null;
+        return updater();
+      }
+      return null;
+    });
+  }
 
   /// Starts [templateId] with the server-issued SDK [token]. Resolves when
   /// the SDK yields a verify token, or the scene ends without one.
+  ///
+  /// Set [onTokenUpdate] before calling if the scene may outlive the auth
+  /// token (~3600s); the native side invokes it via `onTokenUpdate` and
+  /// falls back to [token] when unanswered.
   static Future<FusionVerifyResult> start({
     required String token,
     required String schemeCode,
     required String templateId,
   }) async {
+    _ensureHandler();
     final raw = await channel.invokeMapMethod<String, Object?>('start', {
       'token': token,
       'schemeCode': schemeCode,

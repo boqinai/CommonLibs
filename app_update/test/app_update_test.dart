@@ -175,13 +175,12 @@ void main() {
     );
 
     final installed =
-        await AppUpdateService(
-          updateApiUrl: 'https://api.example.com/update',
-        ).downloadAndInstall(
-          'https://example.com/app.apk',
-          version: '1.1.0',
-          downloadTimeout: Duration.zero,
-        );
+        await AppUpdateService(updateApiUrl: 'https://api.example.com/update')
+            .downloadAndInstall(
+              'https://example.com/app.apk',
+              version: '1.1.0',
+              downloadTimeout: Duration.zero,
+            );
 
     expect(installed, isFalse);
     expect(cancelled, isTrue);
@@ -217,14 +216,13 @@ void main() {
     UpdateFailure? failure;
 
     final installed =
-        await AppUpdateService(
-          updateApiUrl: 'https://api.example.com/update',
-        ).downloadAndInstall(
-          'https://example.com/app.apk',
-          version: '1.1.0',
-          downloadTimeout: const Duration(seconds: 2),
-          onFailure: (value) => failure = value,
-        );
+        await AppUpdateService(updateApiUrl: 'https://api.example.com/update')
+            .downloadAndInstall(
+              'https://example.com/app.apk',
+              version: '1.1.0',
+              downloadTimeout: const Duration(seconds: 2),
+              onFailure: (value) => failure = value,
+            );
 
     expect(installed, isFalse);
     expect(failure?.code, UpdateFailureCode.timedOut);

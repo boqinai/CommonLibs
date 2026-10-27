@@ -26,6 +26,7 @@ class UpdateDownloadController extends ChangeNotifier {
   int? downloadId;
   String? downloadedFilePath;
   UpdateFailure? failure;
+
   /// 当为 true 时，销毁此 Controller 不会取消正在运行的原生后台下载服务。
   bool keepDownloadingOnDispose = false;
   int _generation = 0;
@@ -129,7 +130,8 @@ class UpdateDownloadController extends ChangeNotifier {
 
   @override
   void dispose() {
-    final id = (!keepDownloadingOnDispose && state == UpdateDownloadState.downloading)
+    final id =
+        (!keepDownloadingOnDispose && state == UpdateDownloadState.downloading)
         ? downloadId
         : null;
     _disposed = true;

@@ -1,3 +1,8 @@
+## 0.9.1
+
+- Run package-name and signing validation on the cache-hit path before treating a local APK as already downloaded.
+- Prefer SHA-256 for integrity; when sha256 is present, MD5 is ignored. MD5-only remains supported but is weaker — update centers should publish sha256.
+
 ## 0.9.0
 
 - Validate the APK package name and signing-certificate lineage before marking a download complete or opening either installer entry point.

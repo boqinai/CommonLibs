@@ -12,6 +12,7 @@
 @property(nonatomic, copy) NSString *templateId;
 @property(nonatomic, copy) NSString *authToken;
 @property(nonatomic, assign) BOOL sceneStarted;
+@property(nonatomic, strong) FlutterMethodChannel *channel;
 @end
 
 @implementation FusionAuthPlugin
@@ -21,6 +22,7 @@
       [FlutterMethodChannel methodChannelWithName:@"boqinai/fusion_auth"
                                   binaryMessenger:[registrar messenger]];
   FusionAuthPlugin *instance = [[FusionAuthPlugin alloc] init];
+  instance.channel = channel;
   [registrar addMethodCallDelegate:instance channel:channel];
 }
 
@@ -140,7 +142,28 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 #pragma mark - AlicomFusionAuthDelegate
 
 - (AlicomFusionAuthToken *)onSDKTokenUpdate:(AlicomFusionAuthHandler *)handler {
-  return [[AlicomFusionAuthToken alloc] initWithTokenStr:self.authToken ?: @""];
+  // Ask Dart for a refreshed token. Auth tokens typically last ~3600s; if the
+  // host does not answer (or we are on the main thread and cannot block),
+  // reuse the token from `start`.
+  if (self.channel == nil || [NSThread isMainThread]) {
+    return [[AlicomFusionAuthToken alloc] initWithTokenStr:self.authToken ?: @""];
+  }
+  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+  __block NSString *refreshed = self.authToken ?: @"";
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self.channel invokeMethod:@"onTokenUpdate"
+                     arguments:nil
+                        result:^(id _Nullable result) {
+                          if ([result isKindOfClass:[NSString class]] &&
+                              [(NSString *)result length] > 0) {
+                            refreshed = (NSString *)result;
+                            self.authToken = refreshed;
+                          }
+                          dispatch_semaphore_signal(sem);
+                        }];
+  });
+  dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)));
+  return [[AlicomFusionAuthToken alloc] initWithTokenStr:refreshed ?: @""];
 }
 
 - (void)onSDKTokenAuthSuccess:(AlicomFusionAuthHandler *)handler {

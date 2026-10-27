@@ -116,8 +116,10 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             val safeVersion = version.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val destination = File(directory, "app_update_$safeVersion.apk")
 
-            // 检查本地已存在的安装包是否完整且校验一致
-            if (isFileValid(destination, expectedSha256, expectedMd5, expectedSize)) {
+            // 检查本地已存在的安装包是否完整、校验一致，且包名/签名可用
+            if (isFileValid(destination, expectedSha256, expectedMd5, expectedSize) &&
+                ApkInstallValidator.validate(context, destination).valid
+            ) {
                 val id = UpdateDownloadService.recordCompleted(context, destination)
                 result.success(mapOf(
                     "downloadId" to id,
@@ -154,23 +156,23 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     ): Boolean {
         if (!file.exists() || !file.isFile || file.length() <= 0) return false
 
-        // 必须具备至少一个有效校验凭据（sha256、md5、或者预期大小）
-        val hasHash = !expectedSha256.isNullOrBlank() || !expectedMd5.isNullOrBlank()
+        // 必须具备至少一个有效校验凭据（优先 sha256；无 sha256 时才用 md5 或大小）
+        val hasSha = !expectedSha256.isNullOrBlank()
+        val hasMd5 = !expectedMd5.isNullOrBlank()
         val hasSize = expectedSize != null && expectedSize > 0
-        if (!hasHash && !hasSize) return false
+        if (!hasSha && !hasMd5 && !hasSize) return false
 
         if (hasSize && file.length() != expectedSize) {
             return false
         }
 
-        if (!expectedSha256.isNullOrBlank()) {
+        if (hasSha) {
             val actual = calculateHash(file, "SHA-256") ?: return false
-            if (!actual.equals(expectedSha256, ignoreCase = true)) {
-                return false
-            }
+            return actual.equals(expectedSha256, ignoreCase = true)
         }
 
-        if (!expectedMd5.isNullOrBlank()) {
+        // MD5-only is weaker; prefer publishing sha256 from the update center.
+        if (hasMd5) {
             val actual = calculateHash(file, "MD5") ?: return false
             if (!actual.equals(expectedMd5, ignoreCase = true)) {
                 return false

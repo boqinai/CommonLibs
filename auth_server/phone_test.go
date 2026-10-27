@@ -40,7 +40,7 @@ func TestPhoneRoutes(t *testing.T) {
 	}
 	now := time.Unix(1_700_000_000, 0)
 	sender := &captureSender{}
-	codes := &SMSCodes{Sender: sender, Now: func() time.Time { return now }}
+	codes := &SMSCodes{Sender: sender, HMACKey: []byte("secret"), Now: func() time.Time { return now }}
 	fusion := PhoneVerifierFunc(func(_ context.Context, c PhoneCredential) (string, error) {
 		if c.Token == "good" {
 			return "13900139000", nil
@@ -108,14 +108,14 @@ func TestPhoneRoutes(t *testing.T) {
 		t.Fatal(c)
 	}
 	// Phone-registered users cannot log in with a guessed password.
-	if c, _ := call("/api/auth/login", `{"phone":"13900139000","password":"123456"}`); c != 401 {
+	if c, _ := call("/api/auth/login", `{"phone":"13900139000","password":"12345678"}`); c != 401 {
 		t.Fatal(c)
 	}
 }
 
 func TestSMSCodesAttemptsAndExpiry(t *testing.T) {
 	now := time.Unix(0, 0)
-	s := &SMSCodes{Sender: &captureSender{}, Now: func() time.Time { return now }, MaxAttempts: 2}
+	s := &SMSCodes{Sender: &captureSender{}, HMACKey: []byte("secret"), Now: func() time.Time { return now }, MaxAttempts: 2}
 	ctx := context.Background()
 	if err := s.Send(ctx, "13800138000"); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestSMSCodesAttemptsAndExpiry(t *testing.T) {
 	if _, err := s.VerifyPhone(ctx, PhoneCredential{Phone: "13800138000", Code: code}); err == nil {
 		t.Fatal("accepted expired code")
 	}
-	s2 := &SMSCodes{Sender: &captureSender{}, DailyLimit: 2, Cooldown: time.Second, Now: func() time.Time { return now }}
+	s2 := &SMSCodes{Sender: &captureSender{}, HMACKey: []byte("secret"), DailyLimit: 2, Cooldown: time.Second, Now: func() time.Time { return now }}
 	for i := range 3 {
 		now = now.Add(2 * time.Second)
 		err := s2.Send(ctx, "13800138000")
@@ -167,3 +167,61 @@ func TestRateLimiterAndClientIP(t *testing.T) {
 }
 
 func toJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func TestRateLimiterCompaction(t *testing.T) {
+	l := NewRateLimiterWithCap(2, time.Minute, 3)
+	t0 := time.Unix(0, 0)
+	for _, k := range []string{"a", "b", "c", "d"} {
+		if !l.Allow(k, t0) {
+			t.Fatal(k)
+		}
+	}
+	l.mu.Lock()
+	n := len(l.hits)
+	l.mu.Unlock()
+	if n > 3 {
+		t.Fatalf("expected <=3 keys, got %d", n)
+	}
+}
+
+func TestSMSCodesRequiresHMAC(t *testing.T) {
+	s := &SMSCodes{Sender: &captureSender{}}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic without HMACKey")
+		}
+	}()
+	_ = s.Send(context.Background(), "13800138000")
+}
+
+func TestRegisterRoutesRateLimit(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	auth := New(db, []byte("secret"), WithBcryptCost(4),
+		WithCredentialRateLimiters(NewRateLimiter(2, time.Hour), NewRateLimiter(2, time.Hour)))
+	if err := auth.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+	post := func(path, body string) int {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.RemoteAddr = "9.9.9.9:1"
+		mux.ServeHTTP(res, req)
+		return res.Code
+	}
+	body := `{"phone":"13800138001","password":"12345678"}`
+	if c := post("/api/auth/register", body); c != 201 {
+		t.Fatal(c)
+	}
+	if c := post("/api/auth/register", `{"phone":"13800138002","password":"12345678"}`); c != 201 {
+		t.Fatal(c)
+	}
+	if c := post("/api/auth/register", `{"phone":"13800138003","password":"12345678"}`); c != 429 {
+		t.Fatalf("expected 429, got %d", c)
+	}
+}

@@ -4,4 +4,8 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
     <!-- 不集成友盟，移除其 Google 广告 ID 权限。 -->
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <!-- SDK AAR 合并进来但不需要的权限。ACCESS_WIFI_STATE 仍保留（运营商检测）。 -->
+    <uses-permission android:name="android.permission.RECEIVE_USER_PRESENT" tools:node="remove" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" tools:node="remove" />
 </manifest>

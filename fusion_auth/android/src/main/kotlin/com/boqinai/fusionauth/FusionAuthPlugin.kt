@@ -3,6 +3,8 @@ package com.boqinai.fusionauth
 import android.app.Activity
 import android.os.Handler
 import android.os.Looper
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import com.alicom.fusion.auth.AlicomFusionAuthCallBack
 import com.alicom.fusion.auth.AlicomFusionBusiness
 import com.alicom.fusion.auth.AlicomFusionLog
@@ -127,10 +129,46 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     private fun AlicomFusionEvent?.msg() = this?.errorMsg.orEmpty()
 
     private val callback = object : AlicomFusionAuthCallBack {
-        // Called when the SDK wants a fresh 鉴权Token; the host issues a new one
-        // per login attempt, so the current one is still the best we have.
-        override fun onSDKTokenUpdate(): AlicomFusionAuthToken =
-            AlicomFusionAuthToken().apply { setAuthToken(authToken) }
+        // Asks Dart for a refreshed 鉴权Token (method `onTokenUpdate`). If the
+        // host does not answer within a few seconds, or we are already on the
+        // main thread (cannot block), the token from `start` is reused.
+        // Auth tokens typically expire in ~3600s; hosts that keep a scene open
+        // that long should supply FusionAuth.onTokenUpdate.
+        override fun onSDKTokenUpdate(): AlicomFusionAuthToken {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                return AlicomFusionAuthToken().apply { setAuthToken(authToken) }
+            }
+            val latch = CountDownLatch(1)
+            var refreshed = authToken
+            main.post {
+                try {
+                    channel.invokeMethod("onTokenUpdate", null, object : MethodChannel.Result {
+                        override fun success(result: Any?) {
+                            val t = result as? String
+                            if (!t.isNullOrBlank()) {
+                                authToken = t
+                                refreshed = t
+                            }
+                            latch.countDown()
+                        }
+                        override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                            latch.countDown()
+                        }
+                        override fun notImplemented() {
+                            latch.countDown()
+                        }
+                    })
+                } catch (_: Throwable) {
+                    latch.countDown()
+                }
+            }
+            try {
+                latch.await(8, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            return AlicomFusionAuthToken().apply { setAuthToken(refreshed) }
+        }
 
         override fun onSDKTokenAuthSuccess() {}
 

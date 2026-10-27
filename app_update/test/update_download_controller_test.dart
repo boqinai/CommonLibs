@@ -85,24 +85,27 @@ void main() {
     expect(service.cancelledId, 7);
   });
 
-  test('dispose does not cancel download when keepDownloadingOnDispose is true', () async {
-    final pending = Completer<bool>();
-    final service = _FakeUpdateService(pending: pending);
-    addTearDown(service.close);
-    final controller = UpdateDownloadController(
-      service: service,
-      update: update,
-    );
+  test(
+    'dispose does not cancel download when keepDownloadingOnDispose is true',
+    () async {
+      final pending = Completer<bool>();
+      final service = _FakeUpdateService(pending: pending);
+      addTearDown(service.close);
+      final controller = UpdateDownloadController(
+        service: service,
+        update: update,
+      );
 
-    final started = controller.start();
-    await Future<void>.delayed(Duration.zero);
-    controller.keepDownloadingOnDispose = true;
-    controller.dispose();
-    pending.complete(true);
-    await started;
+      final started = controller.start();
+      await Future<void>.delayed(Duration.zero);
+      controller.keepDownloadingOnDispose = true;
+      controller.dispose();
+      pending.complete(true);
+      await started;
 
-    expect(service.cancelledId, isNull);
-  });
+      expect(service.cancelledId, isNull);
+    },
+  );
 }
 
 class _FakeUpdateService extends AppUpdateService {

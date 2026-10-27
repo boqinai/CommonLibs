@@ -165,13 +165,14 @@ class UpdateDownloadService : Service() {
                 check(total == expectedSize) { "APK size mismatch" }
             }
             var downloaded = 0L
+            // Prefer SHA-256; when present, MD5 is ignored for integrity.
             val digestAlgorithm = when {
                 !expectedSha256.isNullOrBlank() -> "SHA-256"
                 !expectedMd5.isNullOrBlank() -> "MD5"
                 else -> null
             }
             val digest = digestAlgorithm?.let { MessageDigest.getInstance(it) }
-            val expectedHash = expectedSha256 ?: expectedMd5
+            val expectedHash = if (!expectedSha256.isNullOrBlank()) expectedSha256 else expectedMd5
             var lastPublishedAt = 0L
             var lastPercent = -1
             connection.inputStream.use { input ->

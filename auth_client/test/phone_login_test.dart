@@ -46,7 +46,10 @@ void main() {
             return http.Response('{"token":"init","schemeCode":"S"}', 200);
           case '/api/auth/fusion/login':
             expect(body, {'token': 'verify'});
-            return http.Response('{"token":"fusion-jwt"}', 200);
+            return http.Response(
+              '{"token":"fusion-jwt","user":{"id":2,"phone":"13900139000"},"created":false}',
+              200,
+            );
         }
         return http.Response('', 404);
       }),
@@ -65,9 +68,11 @@ void main() {
     );
     expect(client.isLoggedIn, isFalse);
     expect(await client.loginWithSmsCode('13800138000', '123456'), 'sms-jwt');
+    expect(client.lastLoginCreated, isTrue);
     expect(client.profile?.phone, '13800138000');
     expect((await client.fusionAuthToken('android'))['schemeCode'], 'S');
     expect(await client.loginWithFusionToken('verify'), 'fusion-jwt');
+    expect(client.lastLoginCreated, isFalse);
     expect(await store.read(), 'fusion-jwt');
     expect(paths, hasLength(5));
   });

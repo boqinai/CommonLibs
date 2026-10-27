@@ -15,7 +15,10 @@ Boqinai Flutter 应用共用的 Android 应用内更新插件。它统一负责�
 ```yaml
 dependencies:
   app_update:
-    path: ../CommonLibs/app_update
+    git:
+      url: https://github.com/boqinai/CommonLibs.git
+      ref: app_update-v0.9.1
+      path: app_update
 ```
 
 业务项目无需再修改 `MainActivity`、声明安装权限或配置 `FileProvider`。
@@ -49,7 +52,7 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 
 下载完成后可通过 `onDownloaded` 保存 APK 路径，授权返回后调用 `openApk(path)` 直接重试安装。`UpdateDownloadController` 会自动保存 `downloadedFilePath`，其 `retry()` 会优先重新打开已下载文件，不会重复下载。
 
-更新协议可选返回 `sha256`（64 位十六进制）和 `file_size`（字节数）。提供后，原生下载服务会校验 APK 完整性；无论是否提供完整性元数据，原生层都会在下载落盘以及打开安装器前核对 APK 包名与当前应用一致，并核对签名证书或合法的证书轮换链。插件同一时间只允许一个下载任务；重复启动会返回 `download_in_progress`。`downloadTimeout` 限制总下载时长，`inactivityTimeout` 限制两次进度事件之间允许的最长静默时间。
+更新协议可选返回 `sha256`（64 位十六进制）、`md5` 和 `file_size`（字节数）。有 `sha256` 时以它为准并忽略 `md5`；仅 `md5` 仍可用但更弱，建议更新中心下发 `sha256`。缓存命中路径也会再跑一遍包名与签名校验。提供哈希或大小后，原生下载服务会校验 APK 完整性；无论是否提供完整性元数据，原生层都会在下载落盘以及打开安装器前核对 APK 包名与当前应用一致，并核对签名证书或合法的证书轮换链。插件同一时间只允许一个下载任务；重复启动会返回 `download_in_progress`。`downloadTimeout` 限制总下载时长，`inactivityTimeout` 限制两次进度事件之间允许的最长静默时间。
 
 下载失败时可通过 `onFailure` 获取结构化的 `UpdateFailure`；使用 `UpdateDownloadController` 时，可读取其 `failure` 字段展示具体错误原因。Android 15 对 `dataSync` 前台服务触发系统时限时，插件会持久化 `data_sync_timeout` 失败状态、停止服务并保留失败通知，Dart 侧映射为 `UpdateFailureCode.timedOut`。
 

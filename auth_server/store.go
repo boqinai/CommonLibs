@@ -152,22 +152,25 @@ func (s *SQLiteUserStore) UpdateProfile(
 	nickname *string,
 	avatar *string,
 ) (*User, error) {
-	user := &User{}
-	err := s.db.QueryRowContext(
+	// UPDATE then SELECT (no RETURNING) for SQLite < 3.35 compatibility.
+	result, err := s.db.ExecContext(
 		ctx,
 		`UPDATE users
 		 SET nickname=COALESCE(?, nickname), avatar=COALESCE(?, avatar)
-		 WHERE id=?
-		 RETURNING id, phone, password_hash, nickname, avatar`,
+		 WHERE id=?`,
 		nickname,
 		avatar,
 		id,
-	).Scan(&user.ID, &user.Phone, &user.PasswordHash, &user.Nickname, &user.Avatar)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrUserNotFound
-	}
+	)
 	if err != nil {
 		return nil, err
 	}
-	return user, nil
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrUserNotFound
+	}
+	return s.GetUserByID(ctx, id)
 }

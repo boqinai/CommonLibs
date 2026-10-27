@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,33 @@ func WithDatabaseTimeout(timeout time.Duration) Option {
 	return func(s *Server) { s.databaseTimeout = timeout }
 }
 
+// WithCredentialRateLimiters replaces the default per-IP limiters on
+// /register and /login (20/hour and 30/10min). Pass nil limiters via
+// WithoutCredentialRateLimit for tests.
+func WithCredentialRateLimiters(register, login *RateLimiter) Option {
+	return func(s *Server) {
+		s.registerLimiter = register
+		s.loginLimiter = login
+	}
+}
+
+// WithoutCredentialRateLimit disables built-in /register and /login rate
+// limits (useful in tests). Production hosts should keep the defaults or
+// supply their own limiters.
+func WithoutCredentialRateLimit() Option {
+	return func(s *Server) {
+		s.registerLimiter = nil
+		s.loginLimiter = nil
+	}
+}
+
+// WithPhoneValidator sets an optional phone regexp for password
+// register/login. The default remains the historical loose 6–32 byte
+// check so existing accounts keep working; prefer MainlandPhone for new apps.
+func WithPhoneValidator(re *regexp.Regexp) Option {
+	return func(s *Server) { s.phoneValidator = re }
+}
+
 type Server struct {
 	store           UserStore
 	secret          []byte
@@ -37,6 +65,10 @@ type Server struct {
 	tokenExpiry     time.Duration
 	bcryptCost      int
 	databaseTimeout time.Duration
+	registerLimiter *RateLimiter
+	loginLimiter    *RateLimiter
+	phoneValidator  *regexp.Regexp
+	minPasswordLen  int
 }
 
 func New(db *sql.DB, jwtSecret []byte, options ...Option) *Server {
@@ -66,6 +98,9 @@ func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server 
 		tokenExpiry:     30 * 24 * time.Hour,
 		bcryptCost:      bcrypt.DefaultCost,
 		databaseTimeout: 5 * time.Second,
+		registerLimiter: NewRateLimiter(20, time.Hour),
+		loginLimiter:    NewRateLimiter(30, 10*time.Minute),
+		minPasswordLen:  8,
 	}
 	for _, option := range options {
 		option(server)
@@ -75,6 +110,12 @@ func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server 
 	}
 	if server.databaseTimeout <= 0 {
 		panic("authserver: database timeout must be positive")
+	}
+	if server.minPasswordLen < 8 {
+		server.minPasswordLen = 8
+	}
+	if server.minPasswordLen > 72 {
+		panic("authserver: min password length must be <= 72")
 	}
 	dummyHash, err := bcrypt.GenerateFromPassword([]byte("invalid-password"), server.bcryptCost)
 	if err != nil {
@@ -93,10 +134,17 @@ func (s *Server) Init(ctx context.Context) error {
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/auth/register", s.Register)
-	mux.HandleFunc("/api/auth/login", s.Login)
+	mux.Handle("/api/auth/register", maybeLimited(s.registerLimiter, http.HandlerFunc(s.Register)))
+	mux.Handle("/api/auth/login", maybeLimited(s.loginLimiter, http.HandlerFunc(s.Login)))
 	mux.Handle("/api/auth/me", s.RequireAuth(http.HandlerFunc(s.Me)))
 	mux.Handle("/api/auth/profile", s.RequireAuth(http.HandlerFunc(s.UpdateProfile)))
+}
+
+func maybeLimited(l *RateLimiter, next http.Handler) http.Handler {
+	if l == nil {
+		return next
+	}
+	return limited(l, next)
 }
 
 func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +152,7 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	phone, password, ok := credentials(w, r)
+	phone, password, ok := s.credentials(w, r)
 	if !ok {
 		return
 	}
@@ -141,7 +189,7 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	phone, password, ok := credentials(w, r)
+	phone, password, ok := s.credentials(w, r)
 	if !ok {
 		return
 	}
@@ -303,7 +351,7 @@ func (s *Server) authenticate(header string) (int64, error) {
 	return strconv.ParseInt(subject, 10, 64)
 }
 
-func credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+func (s *Server) credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var input struct {
 		Phone    string `json:"phone"`
@@ -316,11 +364,19 @@ func credentials(w http.ResponseWriter, r *http.Request) (string, string, bool) 
 		return "", "", false
 	}
 	input.Phone = strings.TrimSpace(input.Phone)
-	if len(input.Phone) < 6 ||
-		len(input.Phone) > 32 ||
-		len(input.Password) < 6 ||
-		len(input.Password) > 72 {
-		writeError(w, http.StatusBadRequest, "invalid_credentials_format", "phone must contain 6-32 bytes and password 6-72 bytes")
+	minPass := s.minPasswordLen
+	if minPass < 8 {
+		minPass = 8
+	}
+	phoneOK := false
+	if s.phoneValidator != nil {
+		phoneOK = s.phoneValidator.MatchString(input.Phone)
+	} else {
+		phoneOK = len(input.Phone) >= 6 && len(input.Phone) <= 32
+	}
+	if !phoneOK || len(input.Password) < minPass || len(input.Password) > 72 {
+		writeError(w, http.StatusBadRequest, "invalid_credentials_format",
+			"phone format invalid and password must contain "+strconv.Itoa(minPass)+"-72 bytes")
 		return "", "", false
 	}
 	return input.Phone, input.Password, true

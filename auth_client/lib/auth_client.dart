@@ -185,6 +185,8 @@ class MigratingTokenStorage implements TokenStorage {
   }
 }
 
+/// Plaintext file token store. Prefer [SecureTokenStore] in production; keep
+/// this for tests or one-shot migration via [MigratingTokenStorage].
 class TokenStore implements TokenStorage {
   TokenStore({this.name = 'auth_session', Future<File> Function()? fileFactory})
     : _fileFactory = fileFactory;
@@ -245,9 +247,14 @@ class AuthClient {
   int _authGeneration = 0;
   String? _token;
   UserProfile? _profile;
+  bool? _lastLoginCreated;
 
   String? get token => _token;
   UserProfile? get profile => _profile;
+
+  /// Whether the last verified-phone login created a new user.
+  /// Null after password login / restore / logout.
+  bool? get lastLoginCreated => _lastLoginCreated;
   bool get isLoggedIn => _token?.isNotEmpty == true;
   Stream<bool> get onAuthStateChanged => _authStateController.stream;
   Map<String, String> get authorizationHeaders => isLoggedIn
@@ -338,10 +345,22 @@ class AuthClient {
       }
       profile = UserProfile.fromJson(rawUser);
     }
+    bool? created;
+    if (data is Map<String, dynamic> && data.containsKey('created')) {
+      final raw = data['created'];
+      if (raw is! bool) {
+        throw const AuthException(
+          '登录响应中的 created 字段格式错误',
+          code: AuthErrorCode.invalidResponse,
+        );
+      }
+      created = raw;
+    }
     await _tokenStore.write(token);
     _authGeneration++;
     _token = token;
     _profile = profile;
+    _lastLoginCreated = created;
     _authStateController.add(true);
     return token;
   }
@@ -350,6 +369,7 @@ class AuthClient {
     _authGeneration++;
     _token = await _tokenStore.read();
     _profile = null;
+    _lastLoginCreated = null;
     _authStateController.add(isLoggedIn);
     if (!isLoggedIn || !validate) return _token;
     try {
@@ -429,6 +449,7 @@ class AuthClient {
     _authGeneration++;
     _token = null;
     _profile = null;
+    _lastLoginCreated = null;
     await _tokenStore.clear();
     _authStateController.add(false);
   }

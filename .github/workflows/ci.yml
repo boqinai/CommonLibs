@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [app_update, auth_client]
+        package: [app_update, auth_client, fusion_auth]
     defaults:
       run:
         working-directory: ${{ matrix.package }}
@@ -51,7 +51,7 @@ jobs:
           cache-dependency-path: auth_server/go.sum
       - run: go vet ./...
       - run: test -z "$(gofmt -l .)"
-      - run: go test ./...
+      - run: go test -race ./...
 
   python:
     runs-on: ubuntu-latest

@@ -1,3 +1,9 @@
+## 0.14.0
+
+- Expose `lastLoginCreated` after verified-phone login (SMS / fusion) so hosts can tell new registrations apart without parsing raw JSON.
+- Correct the 0.4.0 CHANGELOG note: `flutter_secure_storage` remains 10.3.1 (not 11.0.0).
+- Document that plaintext `TokenStore` is for tests/migration only; production should keep the default `SecureTokenStore`.
+
 ## 0.13.0
 
 - Add verified-phone login against auth_server >= 0.9.0: `sendSmsCode`, `loginWithSmsCode`, `fusionAuthToken`, `loginWithFusionToken`.
@@ -43,7 +49,7 @@
 
 - Add one-time legacy TokenStorage migration.
 - Require HTTPS for remote authentication endpoints.
-- Upgrade flutter_secure_storage to 11.0.0.
+- Depend on flutter_secure_storage 10.3.1 (CHANGELOG previously misstated 11.0.0).
 
 ## 0.3.0
 

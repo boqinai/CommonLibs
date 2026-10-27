@@ -44,10 +44,10 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 		return res
 	}
 
-	if res := call("POST", "/api/auth/register", "", `{"phone":"13800000000","password":"123456"}`); res.Code != http.StatusCreated {
+	if res := call("POST", "/api/auth/register", "", `{"phone":"13800000000","password":"12345678"}`); res.Code != http.StatusCreated {
 		t.Fatalf("register: %d %s", res.Code, res.Body.String())
 	}
-	if res := call("POST", "/api/auth/register", "", `{"phone":"13800000000","password":"123456"}`); res.Code != http.StatusConflict {
+	if res := call("POST", "/api/auth/register", "", `{"phone":"13800000000","password":"12345678"}`); res.Code != http.StatusConflict {
 		t.Fatalf("duplicate: %d %s", res.Code, res.Body.String())
 	} else {
 		var failure struct{ Code string }
@@ -64,7 +64,7 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 		}
 	}
 
-	login := call("POST", "/api/auth/login", "", `{"phone":"13800000000","password":"123456"}`)
+	login := call("POST", "/api/auth/login", "", `{"phone":"13800000000","password":"12345678"}`)
 	var session struct {
 		Token string `json:"token"`
 		User  struct {

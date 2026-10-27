@@ -8,6 +8,7 @@ void main() {
 
   setUp(() {
     calls.clear();
+    FusionAuth.onTokenUpdate = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(FusionAuth.channel, (call) async {
           calls.add(call);
@@ -52,5 +53,16 @@ void main() {
     await FusionAuth.cancel();
     expect(calls.map((c) => c.method), ['start', 'finish', 'cancel']);
     expect(calls[1].arguments, {'success': true});
+  });
+
+  test('onTokenUpdate can be set by the host', () async {
+    FusionAuth.onTokenUpdate = () async => 'refreshed';
+    expect(await FusionAuth.onTokenUpdate!(), 'refreshed');
+    // start binds the method-call handler for native → Dart token refresh.
+    await FusionAuth.start(
+      token: 'good',
+      schemeCode: 'S',
+      templateId: '100001',
+    );
   });
 }

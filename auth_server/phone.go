@@ -2,6 +2,7 @@ package authserver
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -65,11 +66,17 @@ type CodeSender interface {
 var MainlandPhone = regexp.MustCompile(`^1[3-9]\d{9}$`)
 
 // SMSCodes issues and verifies self-managed one-time codes: stored as
-// SHA-256 only, compared in constant time, single use, with expiry,
-// max attempts, resend cooldown and a per-phone daily cap. State is in
-// memory (one process). The zero value of each limit field uses its default.
+// HMAC-SHA256(HMACKey, code), compared in constant time, single use, with
+// expiry, max attempts, resend cooldown and a per-phone daily cap. State is
+// in process memory only (not shared across replicas; restarts drop unused
+// codes). The zero value of each limit field uses its default.
+//
+// HMACKey should be a server secret (JWT secret is fine). When empty,
+// RegisterPhoneRoutes copies Server's JWT secret; calling Send/Verify
+// without a key panics.
 type SMSCodes struct {
 	Sender      CodeSender
+	HMACKey     []byte         // required; see above
 	TTL         time.Duration  // default 5m
 	Cooldown    time.Duration  // default 60s
 	MaxAttempts int            // default 5
@@ -115,6 +122,32 @@ func intOr(v, def int) int {
 	return v
 }
 
+func (s *SMSCodes) hashCode(code string) [32]byte {
+	if len(s.HMACKey) == 0 {
+		panic("authserver: SMSCodes.HMACKey is empty")
+	}
+	mac := hmac.New(sha256.New, s.HMACKey)
+	_, _ = mac.Write([]byte(code))
+	var out [32]byte
+	copy(out[:], mac.Sum(nil))
+	return out
+}
+
+const smsMapSoftCap = 10_000
+
+func (s *SMSCodes) compactLocked(now time.Time) {
+	for phone, times := range s.sends {
+		if len(times) == 0 {
+			delete(s.sends, phone)
+		}
+	}
+	for phone, c := range s.codes {
+		if now.After(c.expires) {
+			delete(s.codes, phone)
+		}
+	}
+}
+
 // ValidPhone reports whether phone matches PhoneFormat.
 func (s *SMSCodes) ValidPhone(phone string) bool {
 	f := s.PhoneFormat
@@ -136,6 +169,9 @@ func (s *SMSCodes) Send(ctx context.Context, phone string) error {
 	s.mu.Lock()
 	if s.sends == nil {
 		s.sends, s.codes = map[string][]time.Time{}, map[string]*smsCode{}
+	}
+	if len(s.sends) > smsMapSoftCap || len(s.codes) > smsMapSoftCap {
+		s.compactLocked(now)
 	}
 	recent := s.sends[phone][:0:0]
 	for _, t := range s.sends[phone] {
@@ -170,7 +206,7 @@ func (s *SMSCodes) Send(ctx context.Context, phone string) error {
 		return err
 	}
 	s.mu.Lock()
-	s.codes[phone] = &smsCode{hash: sha256.Sum256([]byte(code)), expires: now.Add(s.ttl())}
+	s.codes[phone] = &smsCode{hash: s.hashCode(code), expires: now.Add(s.ttl())}
 	s.mu.Unlock()
 	return nil
 }
@@ -188,7 +224,7 @@ func (s *SMSCodes) VerifyPhone(_ context.Context, cred PhoneCredential) (string,
 		delete(s.codes, phone)
 		return "", ErrVerificationFailed
 	}
-	h := sha256.Sum256([]byte(strings.TrimSpace(cred.Code)))
+	h := s.hashCode(strings.TrimSpace(cred.Code))
 	if subtle.ConstantTimeCompare(h[:], c.hash[:]) != 1 {
 		c.attempts++
 		return "", ErrVerificationFailed
@@ -239,6 +275,9 @@ func (s *Server) RegisterPhoneRoutes(mux *http.ServeMux, cfg PhoneRoutes) {
 		login = NewRateLimiter(30, 10*time.Minute)
 	}
 	if cfg.SMS != nil {
+		if len(cfg.SMS.HMACKey) == 0 {
+			cfg.SMS.HMACKey = append([]byte(nil), s.secret...)
+		}
 		mux.Handle(prefix+"/sms/send", limited(send, s.SendSMSCode(cfg.SMS)))
 		mux.Handle(prefix+"/sms/login", limited(login, s.PhoneLogin(cfg.SMS)))
 	}
