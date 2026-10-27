@@ -23,7 +23,11 @@ void main() {
       tokenStore: store,
       client: MockClient((request) async {
         if (request.url.path.endsWith('/login')) {
-          return http.Response('{"token":"jwt"}', 200);
+          return http.Response(
+            '{"token":"jwt","refresh_token":"refresh",'
+            '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
+            200,
+          );
         }
         expect(request.method, 'PUT');
         expect(request.headers['Authorization'], 'Bearer jwt');

@@ -1,3 +1,7 @@
+## 0.10.0
+
+- Integrity checks use SHA-256 and `file_size`. An `md5` field in the update-center response is ignored and is not used to accept an APK.
+
 ## 0.9.1
 
 - Run package-name and signing validation on the cache-hit path before treating a local APK as already downloaded.

@@ -1,3 +1,10 @@
+## 0.12.0
+
+- Access tokens must include `typ=access` and a `jti`. `RequireAuth` rejects tokens that only have `sub` and `exp`, tokens without `typ`, and access tokens without `jti`.
+- `Init` creates the full `users` table, including `nickname` and `avatar`. It no longer alters an older table to add those columns.
+- Password register and login use `MainlandPhone` unless `WithPhoneValidator` supplies another pattern.
+- `WithTokenExpiry` still sets the access-token lifetime (default 2 hours). It is not a switch back to a previous default.
+
 ## 0.11.0
 
 - **Breaking:** default access-token TTL is 2 hours (`DefaultAccessTokenTTL`), not 30 days. Hosts that still want a long-lived access token can pass `WithTokenExpiry(30 * 24 * time.Hour)` and ignore refresh tokens. Tokens already issued with only `sub` and `exp` stay valid until that original `exp`, but they have no `jti` and cannot be revoked.

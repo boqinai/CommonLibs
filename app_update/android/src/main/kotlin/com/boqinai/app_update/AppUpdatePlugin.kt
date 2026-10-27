@@ -104,7 +104,6 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         val version = call.argument<String>("version")
         val wifiOnly = call.argument<Boolean>("wifiOnly") == true
         val expectedSha256 = call.argument<String>("sha256")
-        val expectedMd5 = call.argument<String>("md5")
         val expectedSize = call.longArgument("fileSize")
         if (url.isNullOrBlank() || version.isNullOrBlank()) {
             result.error("invalid_args", "URL or version is empty", null)
@@ -117,7 +116,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             val destination = File(directory, "app_update_$safeVersion.apk")
 
             // 检查本地已存在的安装包是否完整、校验一致，且包名/签名可用
-            if (isFileValid(destination, expectedSha256, expectedMd5, expectedSize) &&
+            if (isFileValid(destination, expectedSha256, expectedSize) &&
                 ApkInstallValidator.validate(context, destination).valid
             ) {
                 val id = UpdateDownloadService.recordCompleted(context, destination)
@@ -137,7 +136,6 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                 destination,
                 wifiOnly,
                 expectedSha256,
-                expectedMd5,
                 expectedSize,
             )
             result.success(mapOf("downloadId" to id, "filePath" to destination.absolutePath))
@@ -151,16 +149,13 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
     private fun isFileValid(
         file: File,
         expectedSha256: String?,
-        expectedMd5: String?,
         expectedSize: Long?,
     ): Boolean {
         if (!file.exists() || !file.isFile || file.length() <= 0) return false
 
-        // 必须具备至少一个有效校验凭据（优先 sha256；无 sha256 时才用 md5 或大小）
         val hasSha = !expectedSha256.isNullOrBlank()
-        val hasMd5 = !expectedMd5.isNullOrBlank()
         val hasSize = expectedSize != null && expectedSize > 0
-        if (!hasSha && !hasMd5 && !hasSize) return false
+        if (!hasSha && !hasSize) return false
 
         if (hasSize && file.length() != expectedSize) {
             return false
@@ -169,14 +164,6 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         if (hasSha) {
             val actual = calculateHash(file, "SHA-256") ?: return false
             return actual.equals(expectedSha256, ignoreCase = true)
-        }
-
-        // MD5-only is weaker; prefer publishing sha256 from the update center.
-        if (hasMd5) {
-            val actual = calculateHash(file, "MD5") ?: return false
-            if (!actual.equals(expectedMd5, ignoreCase = true)) {
-                return false
-            }
         }
 
         return true

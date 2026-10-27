@@ -99,7 +99,6 @@ class UpdateDownloadService : Service() {
         val path = intent.getStringExtra(EXTRA_PATH) ?: return
         val wifiOnly = intent.getBooleanExtra(EXTRA_WIFI_ONLY, false)
         val expectedSha256 = intent.getStringExtra(EXTRA_SHA256)
-        val expectedMd5 = intent.getStringExtra(EXTRA_MD5)
         val expectedSize = intent.getLongExtra(EXTRA_SIZE, -1).takeIf { it >= 0 }
         val cancelled = AtomicBoolean(false)
         cancellations[id] = cancelled
@@ -125,7 +124,6 @@ class UpdateDownloadService : Service() {
                 wifiOnly,
                 cancelled,
                 expectedSha256,
-                expectedMd5,
                 expectedSize,
             )
         }
@@ -139,7 +137,6 @@ class UpdateDownloadService : Service() {
         wifiOnly: Boolean,
         cancelled: AtomicBoolean,
         expectedSha256: String?,
-        expectedMd5: String?,
         expectedSize: Long?,
     ) {
         val partial = File(destination.absolutePath + ".part")
@@ -165,14 +162,8 @@ class UpdateDownloadService : Service() {
                 check(total == expectedSize) { "APK size mismatch" }
             }
             var downloaded = 0L
-            // Prefer SHA-256; when present, MD5 is ignored for integrity.
-            val digestAlgorithm = when {
-                !expectedSha256.isNullOrBlank() -> "SHA-256"
-                !expectedMd5.isNullOrBlank() -> "MD5"
-                else -> null
-            }
-            val digest = digestAlgorithm?.let { MessageDigest.getInstance(it) }
-            val expectedHash = if (!expectedSha256.isNullOrBlank()) expectedSha256 else expectedMd5
+            val expectedHash = expectedSha256?.takeIf { it.isNotBlank() }
+            val digest = expectedHash?.let { MessageDigest.getInstance("SHA-256") }
             var lastPublishedAt = 0L
             var lastPercent = -1
             connection.inputStream.use { input ->
@@ -207,7 +198,7 @@ class UpdateDownloadService : Service() {
             if (expectedSize != null) {
                 check(downloaded == expectedSize) { "APK size mismatch" }
             }
-            if (digest != null) {
+            if (digest != null && expectedHash != null) {
                 val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
                 check(actual.equals(expectedHash, ignoreCase = true)) { "APK checksum mismatch" }
             }
@@ -429,7 +420,6 @@ class UpdateDownloadService : Service() {
         private const val EXTRA_PATH = "path"
         private const val EXTRA_WIFI_ONLY = "wifiOnly"
         private const val EXTRA_SHA256 = "sha256"
-        private const val EXTRA_MD5 = "md5"
         private const val EXTRA_SIZE = "size"
         private const val CHANNEL_ID = "app_update_downloads"
         private const val PREFERENCES = "app_update_downloads"
@@ -478,7 +468,6 @@ class UpdateDownloadService : Service() {
             destination: File,
             wifiOnly: Boolean,
             expectedSha256: String?,
-            expectedMd5: String?,
             expectedSize: Long?,
         ): Long {
             val id = nextId.incrementAndGet()
@@ -499,7 +488,6 @@ class UpdateDownloadService : Service() {
                         putExtra(EXTRA_PATH, destination.absolutePath)
                         putExtra(EXTRA_WIFI_ONLY, wifiOnly)
                         putExtra(EXTRA_SHA256, expectedSha256)
-                        putExtra(EXTRA_MD5, expectedMd5)
                         if (expectedSize != null) putExtra(EXTRA_SIZE, expectedSize)
                     },
                 )

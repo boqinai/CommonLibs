@@ -218,14 +218,36 @@ func TestTokenExpiryAndAlgorithms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authGet(t, mux, "/private", legacy) != http.StatusOK {
-		t.Fatal("legacy sub+exp token rejected")
+	if authGet(t, mux, "/private", legacy) != http.StatusUnauthorized {
+		t.Fatal("sub+exp token without typ and jti accepted")
+	}
+	noTyp, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"jti": "present",
+	}).SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authGet(t, mux, "/private", noTyp) != http.StatusUnauthorized {
+		t.Fatal("token without typ accepted")
+	}
+	noJTI, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"typ": TokenTypeAccess,
+	}).SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authGet(t, mux, "/private", noJTI) != http.StatusUnauthorized {
+		t.Fatal("access token without jti accepted")
 	}
 	if code, body := postAuth(t, mux, "/api/auth/logout", "", legacy); code != http.StatusOK || body["ok"] != true {
-		t.Fatalf("legacy logout: %d %v", code, body)
+		t.Fatalf("logout of token without jti: %d %v", code, body)
 	}
-	if authGet(t, mux, "/private", legacy) != http.StatusOK {
-		t.Fatal("legacy token without jti was revoked")
+	if authGet(t, mux, "/private", legacy) != http.StatusUnauthorized {
+		t.Fatal("token without typ and jti authorized after logout")
 	}
 
 	hs384, err := jwt.NewWithClaims(jwt.SigningMethodHS384, jwt.MapClaims{

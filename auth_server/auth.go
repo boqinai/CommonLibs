@@ -65,11 +65,14 @@ func WithoutCredentialRateLimit() Option {
 	}
 }
 
-// WithPhoneValidator sets an optional phone regexp for password
-// register/login. The default remains the historical loose 6–32 byte
-// check so existing accounts keep working; prefer MainlandPhone for new apps.
+// WithPhoneValidator overrides the password register/login phone check.
+// The default is MainlandPhone. A nil regexp is ignored.
 func WithPhoneValidator(re *regexp.Regexp) Option {
-	return func(s *Server) { s.phoneValidator = re }
+	return func(s *Server) {
+		if re != nil {
+			s.phoneValidator = re
+		}
+	}
 }
 
 type Server struct {
@@ -119,6 +122,7 @@ func newWithStore(store UserStore, jwtSecret []byte, options ...Option) *Server 
 		registerLimiter: NewRateLimiter(20, time.Hour),
 		loginLimiter:    NewRateLimiter(30, 10*time.Minute),
 		refreshLimiter:  NewRateLimiter(60, 10*time.Minute),
+		phoneValidator:  MainlandPhone,
 		minPasswordLen:  8,
 	}
 	for _, option := range options {
@@ -359,13 +363,7 @@ func (s *Server) credentials(w http.ResponseWriter, r *http.Request) (string, st
 	if minPass < 8 {
 		minPass = 8
 	}
-	phoneOK := false
-	if s.phoneValidator != nil {
-		phoneOK = s.phoneValidator.MatchString(input.Phone)
-	} else {
-		phoneOK = len(input.Phone) >= 6 && len(input.Phone) <= 32
-	}
-	if !phoneOK || len(input.Password) < minPass || len(input.Password) > 72 {
+	if !s.phoneValidator.MatchString(input.Phone) || len(input.Password) < minPass || len(input.Password) > 72 {
 		writeError(w, http.StatusBadRequest, CodeInvalidCredentialsFormat,
 			"phone format invalid and password must contain "+strconv.Itoa(minPass)+"-72 bytes")
 		return "", "", false

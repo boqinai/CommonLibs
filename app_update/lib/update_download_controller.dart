@@ -51,7 +51,6 @@ class UpdateDownloadController extends ChangeNotifier {
         inactivityTimeout: inactivityTimeout,
         wifiOnly: wifiOnly,
         expectedSha256: update.sha256,
-        expectedMd5: update.md5,
         expectedSize: update.fileSize,
         onStarted: (id) {
           if (generation != _generation || _disposed) {

@@ -54,8 +54,8 @@ class UserProfile {
         id <= 0 ||
         phone is! String ||
         phone.isEmpty ||
-        (nickname != null && nickname is! String) ||
-        (avatar != null && avatar is! String)) {
+        nickname is! String ||
+        avatar is! String) {
       throw const AuthException(
         '用户资料响应格式错误',
         code: AuthErrorCode.invalidResponse,
@@ -64,8 +64,8 @@ class UserProfile {
     return UserProfile(
       id: id,
       phone: phone,
-      nickname: nickname as String? ?? '',
-      avatar: avatar as String? ?? '0',
+      nickname: nickname,
+      avatar: avatar,
     );
   }
 
@@ -141,18 +141,12 @@ abstract interface class TokenStorage {
   Future<String?> read();
   Future<void> write(String token);
   Future<void> clear();
-}
-
-/// Optional persistence for the refresh token. Built-in stores implement it.
-/// A custom [TokenStorage] that does not will keep the refresh token in
-/// memory for the life of [AuthClient] only.
-abstract interface class RefreshTokenStorage {
   Future<String?> readRefresh();
   Future<void> writeRefresh(String token);
   Future<void> clearRefresh();
 }
 
-class SecureTokenStore implements TokenStorage, RefreshTokenStorage {
+class SecureTokenStore implements TokenStorage {
   SecureTokenStore({this.name = 'auth_session', FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
@@ -181,73 +175,9 @@ class SecureTokenStore implements TokenStorage, RefreshTokenStorage {
   Future<void> clearRefresh() => _storage.delete(key: _refreshKey);
 }
 
-class MigratingTokenStorage implements TokenStorage, RefreshTokenStorage {
-  MigratingTokenStorage({required this.primary, required this.legacy});
-
-  final TokenStorage primary;
-  final TokenStorage legacy;
-
-  @override
-  Future<String?> read() async {
-    final current = await primary.read();
-    if (current != null) return current;
-    final token = await legacy.read();
-    if (token == null) return null;
-    await primary.write(token);
-    await legacy.clear();
-    return token;
-  }
-
-  @override
-  Future<void> write(String token) async {
-    await primary.write(token);
-    await legacy.clear();
-  }
-
-  @override
-  Future<void> clear() async {
-    await primary.clear();
-    await legacy.clear();
-  }
-
-  @override
-  Future<String?> readRefresh() async {
-    final currentStore = _refreshStore(primary);
-    if (currentStore == null) return null;
-    final current = await currentStore.readRefresh();
-    if (current != null && current.isNotEmpty) return current;
-    final oldStore = _refreshStore(legacy);
-    if (oldStore == null) return null;
-    final token = await oldStore.readRefresh();
-    if (token == null || token.isEmpty) return null;
-    await currentStore.writeRefresh(token);
-    await oldStore.clearRefresh();
-    return token;
-  }
-
-  @override
-  Future<void> writeRefresh(String token) async {
-    final currentStore = _refreshStore(primary);
-    if (currentStore != null) await currentStore.writeRefresh(token);
-    final oldStore = _refreshStore(legacy);
-    if (oldStore != null) await oldStore.clearRefresh();
-  }
-
-  @override
-  Future<void> clearRefresh() async {
-    final currentStore = _refreshStore(primary);
-    final oldStore = _refreshStore(legacy);
-    if (currentStore != null) await currentStore.clearRefresh();
-    if (oldStore != null) await oldStore.clearRefresh();
-  }
-}
-
-RefreshTokenStorage? _refreshStore(TokenStorage storage) =>
-    storage is RefreshTokenStorage ? storage as RefreshTokenStorage : null;
-
-/// Plaintext file token store. Prefer [SecureTokenStore] in production; keep
-/// this for tests or one-shot migration via [MigratingTokenStorage].
-class TokenStore implements TokenStorage, RefreshTokenStorage {
+/// Plaintext file token store. Prefer [SecureTokenStore] in production; use
+/// this for tests or an explicit low-security store.
+class TokenStore implements TokenStorage {
   TokenStore({this.name = 'auth_session', Future<File> Function()? fileFactory})
     : _fileFactory = fileFactory;
 
@@ -316,7 +246,6 @@ class AuthClient {
     TokenStorage? tokenStore,
     this.headerProvider,
     this.onRefreshToken,
-    this.revokeOnLogout = true,
   }) : baseUrl = _normalizeBaseUrl(baseUrl),
        authPath = _normalizeAuthPath(authPath),
        _client = client ?? http.Client(),
@@ -329,11 +258,6 @@ class AuthClient {
   final AuthHeaderProvider? headerProvider;
   final AuthTokenRefresher? onRefreshToken;
 
-  /// When true (the default), [logout] POSTs `/logout` so the server can
-  /// revoke the access token and refresh token. Failures are ignored and
-  /// the local session is still cleared. Set false for a client-only logout
-  /// (auth_server older than 0.11.0, or tests).
-  final bool revokeOnLogout;
   final StreamController<bool> _authStateController =
       StreamController<bool>.broadcast();
   Future<_Refreshed?>? _activeRefresh;
@@ -375,8 +299,7 @@ class AuthClient {
     return _acceptLogin(data);
   }
 
-  /// Requests an SMS code (auth_server >= 0.9.0); returns the resend
-  /// cooldown in seconds.
+  /// Requests an SMS code and returns the server's resend cooldown in seconds.
   Future<int> sendSmsCode(String phone) async {
     final data = await _request(
       'POST',
@@ -384,7 +307,13 @@ class AuthClient {
       body: {'phone': phone.trim()},
     );
     final cooldown = data is Map<String, dynamic> ? data['cooldown'] : null;
-    return cooldown is int && cooldown > 0 ? cooldown : 60;
+    if (cooldown is! int || cooldown <= 0) {
+      throw const AuthException(
+        '短信响应格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
+    return cooldown;
   }
 
   /// Logs in (registering if needed) with an SMS code.
@@ -424,26 +353,29 @@ class AuthClient {
   }
 
   Future<String> _acceptLogin(dynamic data) async {
-    final token = data is Map<String, dynamic> ? data['token'] : null;
+    if (data is! Map<String, dynamic>) {
+      throw const AuthException(
+        '登录响应格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
+    final token = data['token'];
     if (token is! String || token.isEmpty) {
       throw const AuthException(
         '登录响应缺少 token',
         code: AuthErrorCode.invalidResponse,
       );
     }
-    UserProfile? profile;
     final rawUser = data['user'];
-    if (rawUser != null) {
-      if (rawUser is! Map<String, dynamic>) {
-        throw const AuthException(
-          '登录响应中的用户资料格式错误',
-          code: AuthErrorCode.invalidResponse,
-        );
-      }
-      profile = UserProfile.fromJson(rawUser);
+    if (rawUser is! Map<String, dynamic>) {
+      throw const AuthException(
+        '登录响应中的用户资料格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
     }
+    final profile = UserProfile.fromJson(rawUser);
     bool? created;
-    if (data is Map<String, dynamic> && data.containsKey('created')) {
+    if (data.containsKey('created')) {
       final raw = data['created'];
       if (raw is! bool) {
         throw const AuthException(
@@ -453,27 +385,16 @@ class AuthClient {
       }
       created = raw;
     }
-    String? refresh;
-    if (data is Map<String, dynamic> && data.containsKey('refresh_token')) {
-      final rawRefresh = data['refresh_token'];
-      if (rawRefresh is! String || rawRefresh.isEmpty) {
-        throw const AuthException(
-          '登录响应中的 refresh_token 格式错误',
-          code: AuthErrorCode.invalidResponse,
-        );
-      }
-      refresh = rawRefresh;
+    final refresh = data['refresh_token'];
+    if (refresh is! String || refresh.isEmpty) {
+      throw const AuthException(
+        '登录响应缺少 refresh_token',
+        code: AuthErrorCode.invalidResponse,
+      );
     }
     final storage = _tokenStore;
     await storage.write(token);
-    final refreshStore = _refreshStore(storage);
-    if (refreshStore != null) {
-      if (refresh != null) {
-        await refreshStore.writeRefresh(refresh);
-      } else {
-        await refreshStore.clearRefresh();
-      }
-    }
+    await storage.writeRefresh(refresh);
     _authGeneration++;
     _token = token;
     _refreshToken = refresh;
@@ -488,9 +409,8 @@ class AuthClient {
     final storage = _tokenStore;
     _token = await storage.read();
     _refreshToken = null;
-    final refreshStore = _refreshStore(storage);
-    if (_token != null && refreshStore != null) {
-      final refresh = await refreshStore.readRefresh();
+    if (_token != null) {
+      final refresh = await storage.readRefresh();
       _refreshToken = (refresh != null && refresh.isNotEmpty) ? refresh : null;
     }
     _profile = null;
@@ -580,12 +500,12 @@ class AuthClient {
     _lastLoginCreated = null;
     final storage = _tokenStore;
     await storage.clear();
-    await _refreshStore(storage)?.clearRefresh();
+    await storage.clearRefresh();
     _authStateController.add(false);
     final hasToken =
         (access != null && access.isNotEmpty) ||
         (refresh != null && refresh.isNotEmpty);
-    if (revokeOnLogout && hasToken) {
+    if (hasToken) {
       await _revokeRemote(access, refresh);
     }
   }
@@ -630,10 +550,9 @@ class AuthClient {
       );
     }
     final rawNext = data['refresh_token'];
-    if (rawNext == null) return _Refreshed(access, refreshToken);
     if (rawNext is! String || rawNext.isEmpty) {
       throw const AuthException(
-        '刷新响应中的 refresh_token 格式错误',
+        '刷新响应缺少 refresh_token',
         code: AuthErrorCode.invalidResponse,
       );
     }
@@ -644,9 +563,8 @@ class AuthClient {
     final storage = _tokenStore;
     await storage.write(refreshed.access);
     final next = refreshed.refresh;
-    final refreshStore = _refreshStore(storage);
-    if (next != null && next.isNotEmpty && refreshStore != null) {
-      await refreshStore.writeRefresh(next);
+    if (next != null && next.isNotEmpty) {
+      await storage.writeRefresh(next);
       _refreshToken = next;
     }
     _token = refreshed.access;
@@ -843,7 +761,9 @@ class AuthClient {
 
   static ({String message, String? code}) _decodeError(String body) {
     final text = body.trim();
-    if (text.isEmpty) return (message: '认证请求失败', code: null);
+    if (text.isEmpty) {
+      return (message: '认证请求失败', code: AuthErrorCode.invalidResponse);
+    }
     try {
       final data = jsonDecode(text);
       if (data is Map<String, dynamic>) {
@@ -853,10 +773,10 @@ class AuthClient {
           return (message: message, code: code is String ? code : null);
         }
       }
-    } catch (_) {
-      // 兼容旧服务端的纯文本错误响应。
+    } on FormatException {
+      return (message: '认证响应格式错误', code: AuthErrorCode.invalidResponse);
     }
-    return (message: text, code: null);
+    return (message: '认证响应格式错误', code: AuthErrorCode.invalidResponse);
   }
 }
 

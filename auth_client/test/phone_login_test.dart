@@ -37,7 +37,8 @@ void main() {
               );
             }
             return http.Response(
-              '{"token":"sms-jwt","user":{"id":1,"phone":"13800138000"},'
+              '{"token":"sms-jwt","refresh_token":"sms-refresh",'
+              '"user":{"id":1,"phone":"13800138000","nickname":"","avatar":"0"},'
               '"created":true}',
               200,
             );
@@ -47,7 +48,9 @@ void main() {
           case '/api/auth/fusion/login':
             expect(body, {'token': 'verify'});
             return http.Response(
-              '{"token":"fusion-jwt","user":{"id":2,"phone":"13900139000"},"created":false}',
+              '{"token":"fusion-jwt","refresh_token":"fusion-refresh",'
+              '"user":{"id":2,"phone":"13900139000","nickname":"","avatar":"0"},'
+              '"created":false}',
               200,
             );
         }

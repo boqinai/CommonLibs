@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 )
 
@@ -47,61 +46,6 @@ func (s *SQLiteUserStore) Init(ctx context.Context) error {
 		nickname TEXT NOT NULL DEFAULT '',
 		avatar TEXT NOT NULL DEFAULT '0'
 	)`)
-	if err != nil {
-		return err
-	}
-	return s.ensureColumns(ctx)
-}
-
-func (s *SQLiteUserStore) ensureColumns(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(users)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	hasNickname := false
-	hasAvatar := false
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dfltValue any
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
-			return err
-		}
-		switch name {
-		case "nickname":
-			hasNickname = true
-		case "avatar":
-			hasAvatar = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-
-	if !hasNickname {
-		if err := s.addColumn(ctx, `ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-	}
-	if !hasAvatar {
-		if err := s.addColumn(ctx, `ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT '0'`); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *SQLiteUserStore) addColumn(ctx context.Context, statement string) error {
-	_, err := s.db.ExecContext(ctx, statement)
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return nil
-	}
 	return err
 }
 

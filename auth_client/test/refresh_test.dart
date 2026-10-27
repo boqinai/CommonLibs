@@ -52,7 +52,7 @@ void main() {
         expect(request.url.path, '/api/auth/login');
         return http.Response(
           '{"token":"access","refresh_token":"refresh","expires_in":7200,'
-          '"user":{"id":1,"phone":"13800000000"}}',
+          '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
           200,
         );
       }),
@@ -208,7 +208,8 @@ void main() {
         seen.add(request.url.path);
         if (request.url.path.endsWith('/login')) {
           return http.Response(
-            '{"token":"access","refresh_token":"refresh"}',
+            '{"token":"access","refresh_token":"refresh",'
+            '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
             200,
           );
         }
@@ -236,7 +237,11 @@ void main() {
       tokenStore: store,
       client: MockClient((request) async {
         if (request.url.path.endsWith('/login')) {
-          return http.Response('{"token":"access"}', 200);
+          return http.Response(
+            '{"token":"access","refresh_token":"refresh",'
+            '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
+            200,
+          );
         }
         throw const SocketException('offline');
       }),
@@ -248,28 +253,6 @@ void main() {
 
     expect(client.isLoggedIn, isFalse);
     expect(await store.read(), isNull);
-  });
-
-  test('revokeOnLogout false does not call the server', () async {
-    final client = AuthClient(
-      baseUrl: 'https://example.test',
-      tokenStore: store,
-      revokeOnLogout: false,
-      client: MockClient((request) async {
-        expect(request.url.path, '/api/auth/login');
-        return http.Response(
-          '{"token":"access","refresh_token":"refresh"}',
-          200,
-        );
-      }),
-    );
-    addTearDown(client.close);
-    await client.login('13800000000', '12345678');
-
-    await client.logout();
-
-    expect(await store.read(), isNull);
-    expect(await store.readRefresh(), isNull);
   });
 
   test(

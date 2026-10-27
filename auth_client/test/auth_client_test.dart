@@ -27,7 +27,8 @@ void main() {
           expect(request.url.path, '/product/api/auth/login');
           expect(request.body, contains('13800000000'));
           return http.Response(
-            '{"token":"jwt","user":{"id":7,"phone":"13800000000",'
+            '{"token":"jwt","refresh_token":"refresh",'
+            '"user":{"id":7,"phone":"13800000000",'
             '"nickname":"棋友","avatar":"2"}}',
             200,
             headers: {'content-type': 'application/json; charset=utf-8'},
@@ -114,7 +115,7 @@ void main() {
     );
   });
 
-  test('plain text errors from older servers remain supported', () async {
+  test('non-JSON error bodies are invalid responses', () async {
     final client = AuthClient(
       baseUrl: 'https://example.test',
       tokenStore: store,
@@ -127,14 +128,34 @@ void main() {
       () => client.login('13800000000', 'bad-password'),
       throwsA(
         isA<AuthException>()
-            .having((error) => error.code, 'code', isNull)
             .having(
-              (error) => error.message,
-              'message',
-              'invalid phone or password',
-            ),
+              (error) => error.code,
+              'code',
+              AuthErrorCode.invalidResponse,
+            )
+            .having((error) => error.statusCode, 'statusCode', 401),
       ),
     );
+  });
+
+  test('login requires token, refresh token, and user', () async {
+    final client = AuthClient(
+      baseUrl: 'https://example.test',
+      tokenStore: store,
+      client: MockClient((_) async => http.Response('{"token":"jwt"}', 200)),
+    );
+
+    expect(
+      () => client.login('13800000000', '123456'),
+      throwsA(
+        isA<AuthException>().having(
+          (error) => error.code,
+          'code',
+          AuthErrorCode.invalidResponse,
+        ),
+      ),
+    );
+    expect(await store.read(), isNull);
   });
 
   test('supports a service-specific authentication path', () async {
@@ -144,7 +165,11 @@ void main() {
       tokenStore: store,
       client: MockClient((request) async {
         expect(request.url.path, '/penny/auth/login');
-        return http.Response('{"token":"jwt"}', 200);
+        return http.Response(
+          '{"token":"jwt","refresh_token":"refresh",'
+          '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
+          200,
+        );
       }),
     );
 
@@ -162,7 +187,13 @@ void main() {
     final client = AuthClient(
       baseUrl: 'https://example.test',
       tokenStore: store,
-      client: MockClient((_) async => http.Response('{"token":"jwt"}', 200)),
+      client: MockClient(
+        (_) async => http.Response(
+          '{"token":"jwt","refresh_token":"refresh",'
+          '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
+          200,
+        ),
+      ),
     );
     await client.login('13800000000', '123456');
 
@@ -195,7 +226,12 @@ void main() {
             headers: {'content-type': 'application/json; charset=utf-8'},
           );
         }
-        return http.Response('{"token":"jwt"}', 200);
+        return http.Response(
+          '{"token":"jwt","refresh_token":"refresh",'
+          '"user":{"id":8,"phone":"13811112222","nickname":"旧昵称","avatar":"1"}}',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       }),
     );
     await client.login('13811112222', '123456');
@@ -221,6 +257,16 @@ void main() {
         ),
       ),
     );
+    expect(
+      () => UserProfile.fromJson({'id': 1, 'phone': '13800000000'}),
+      throwsA(
+        isA<AuthException>().having(
+          (error) => error.code,
+          'code',
+          AuthErrorCode.invalidResponse,
+        ),
+      ),
+    );
   });
 
   test('updateProfile rejects a response without a profile', () async {
@@ -229,7 +275,11 @@ void main() {
       tokenStore: store,
       client: MockClient((request) async {
         if (request.url.path.endsWith('/login')) {
-          return http.Response('{"token":"jwt"}', 200);
+          return http.Response(
+            '{"token":"jwt","refresh_token":"refresh",'
+            '"user":{"id":1,"phone":"13800000000","nickname":"","avatar":"0"}}',
+            200,
+          );
         }
         return http.Response('{"ok":true}', 200);
       }),

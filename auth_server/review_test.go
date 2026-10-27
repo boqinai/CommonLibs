@@ -75,24 +75,24 @@ func TestInitDoesNotChangeConnectionPoolLimit(t *testing.T) {
 	}
 }
 
-type legacyUserStore struct{}
+type profilelessUserStore struct{}
 
-func (legacyUserStore) Init(context.Context) error { return nil }
-func (legacyUserStore) UserExists(context.Context, string) (bool, error) {
+func (profilelessUserStore) Init(context.Context) error { return nil }
+func (profilelessUserStore) UserExists(context.Context, string) (bool, error) {
 	return false, nil
 }
-func (legacyUserStore) CreateUser(context.Context, string, string) (int64, error) {
+func (profilelessUserStore) CreateUser(context.Context, string, string) (int64, error) {
 	return 1, nil
 }
-func (legacyUserStore) GetUserByPhone(context.Context, string) (*User, error) {
+func (profilelessUserStore) GetUserByPhone(context.Context, string) (*User, error) {
 	return nil, ErrUserNotFound
 }
-func (legacyUserStore) GetUserByID(context.Context, int64) (*User, error) {
+func (profilelessUserStore) GetUserByID(context.Context, int64) (*User, error) {
 	return &User{ID: 1, Phone: "13800000000"}, nil
 }
 
-func TestLegacyUserStoreRemainsCompatible(t *testing.T) {
-	auth := NewWithStore(legacyUserStore{}, []byte("test-secret"))
+func TestStoreWithoutProfilesReturnsNotImplemented(t *testing.T) {
+	auth := NewWithStore(profilelessUserStore{}, []byte("test-secret"))
 	request := httptest.NewRequest(http.MethodPut, "/api/auth/profile", strings.NewReader(`{"nickname":"new"}`))
 	request = request.WithContext(context.WithValue(request.Context(), userContextKey{}, int64(1)))
 	response := httptest.NewRecorder()
