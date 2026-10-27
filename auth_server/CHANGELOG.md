@@ -1,3 +1,9 @@
+## 0.13.0
+
+- **Breaking:** `TokenBlacklist` gains `Consume`, the atomic revoke-if-active used by `POST /api/auth/refresh`. Two refreshes of the same token can no longer both succeed. `MemoryTokenBlacklist.Consume` holds one lock for the check and the insert. `SQLiteTokenBlacklist` does the same in one transaction with `INSERT OR IGNORE` and `RowsAffected` (SQLite 3.22: no UPSERT, no RETURNING).
+- **Breaking:** `ClientIP` returns `RemoteAddr` only. `X-Forwarded-For` is ignored unless `WithTrustedProxies` lists the immediate peer (IP or CIDR) or `WithClientIPResolver` replaces the policy. A spoofed forwarding header no longer skips per-IP limits.
+- `SMSCodes.compactLocked` drops send timestamps older than 24h, deletes empty keys, and evicts the oldest phones by last activity when the map is still above the soft cap.
+
 ## 0.12.0
 
 - Access tokens must include `typ=access` and a `jti`. `RequireAuth` rejects tokens that only have `sub` and `exp`, tokens without `typ`, and access tokens without `jti`.

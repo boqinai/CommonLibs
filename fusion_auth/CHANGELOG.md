@@ -1,3 +1,7 @@
+## 0.3.1
+
+- SDK init failures complete the pending `start` once, with `start_failed`. `release` takes the terminal code and message; a later `cancelled` cannot replace a result that was already delivered. Same ordering on Android (`FusionStartGate`) and iOS (`FusionStartGate`).
+
 ## 0.3.0
 
 - Move the Android `fusionauth-1.2.16.aar` and the iOS `AlicomFusionAuth` Mach-O binaries (device and simulator) to Git LFS. Contributors and CI need `git lfs install` and `git lfs pull`; `actions/checkout` uses `lfs: true`. Headers and resource bundles stay in regular Git.

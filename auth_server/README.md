@@ -24,7 +24,7 @@ mux.Handle("/api/private", auth.RequireAuth(http.HandlerFunc(func(w http.Respons
 引用模块：
 
 ```bash
-go get github.com/boqinai/CommonLibs/auth_server@auth_server/v0.12.0
+go get github.com/boqinai/CommonLibs/auth_server@auth_server/v0.13.0
 ```
 
 使用 `modernc.org/sqlite` 连接池时，应在 DSN 上为每条连接设置 PRAGMA：
@@ -56,11 +56,11 @@ db, err := sql.Open(
 | `typ` | `access` | `refresh` |
 | 其它 claims | `jti`（每次随机）、`sub`（用户 id）、`exp` | 同左 |
 
-`RequireAuth` 拒绝 refresh token。`POST /api/auth/refresh` body `{"refresh_token":"..."}` 校验通过后**轮换**：旧 refresh 的 `jti` 作废，返回新的 access + refresh（不含 `user`）。用户已删除时返回 401 `invalid_refresh_token`。该路由默认按 IP 每 10 分钟 60 次。
+`RequireAuth` 拒绝 refresh token。`POST /api/auth/refresh` body `{"refresh_token":"..."}` 校验通过后**轮换**：旧 refresh 的 `jti` 通过 `TokenBlacklist.Consume` 一次作废（检查和写入在同一临界区），返回新的 access + refresh（不含 `user`）。同一 refresh 并发两次，最多一次成功。用户已删除或该 `jti` 已被消费时返回 401 `invalid_refresh_token`。该路由默认按 IP 每 10 分钟 60 次。
 
 `POST /api/auth/logout` 撤销 `Authorization: Bearer` access token 的 `jti`（过期也认签名，便于退出），body 可带 `{"refresh_token":"..."}` 一并撤销。签名不对的字符串会被忽略。成功响应 `{"ok":true}`。黑名单存储失败时返回 500，调用方应重试；auth_client 仍会清掉本地会话。
 
-撤销列表是 `TokenBlacklist`。默认 `MemoryTokenBlacklist` 把 `jti` 留到该 token 自己的 `exp`，进程内有效，**不使用 SQLite**。多实例必须 `WithTokenBlacklist` 换成共享存储（Redis、数据库等）；若自备 SQLite 实现，请保持 3.22 兼容（不要用 `UPSERT` / `RETURNING`）。`IssueToken` 只返回 access token；`IssueTokens` 返回一对。
+撤销列表是 `TokenBlacklist`（`Revoke`、`IsRevoked`、`Consume`）。默认 `MemoryTokenBlacklist` 把 `jti` 留到该 token 自己的 `exp`，进程内有效，**不使用 SQLite**。多实例用 `NewSQLiteTokenBlacklist` 或 `WithTokenBlacklist` 换共享存储。自备或使用 SQLite 时保持 3.22 兼容：`Consume` 在一个事务里 `INSERT OR IGNORE`，靠 `jti` 主键和 `RowsAffected` 决定谁赢，不要用 `UPSERT` / `RETURNING`。`IssueToken` 只返回 access token；`IssueTokens` 返回一对。
 
 ## 错误码
 
@@ -114,8 +114,8 @@ auth.RegisterPhoneRoutes(mux, authserver.PhoneRoutes{
 })
 ```
 
-- `SMSCodes`：验证码自行生成与校验——存 `HMAC-SHA256(HMACKey, code)`（`RegisterPhoneRoutes` 在 HMACKey 为空时用 JWT secret）、常量时间比较、一次性、默认 5 分钟过期、最多 5 次尝试、60 秒重发冷却、每号每天 10 条；**状态仅在单进程内存中**（多副本/重启会丢未用验证码，需要跨实例时请自备存储）。验证码永远不会出现在响应或日志里（日志中手机号经 `MaskPhone` 脱敏）。
-- 限流：`SendLimiter`（`/sms/send` 与 `/fusion/token` 共用，默认每 IP 每小时 20 次）和 `LoginLimiter`（默认每 IP 10 分钟 30 次），按 `ClientIP`（取 `X-Forwarded-For` 最后一跳，需由宿主自己的反向代理追加；不经代理时应剥离该头）。`RateLimiter` 也可单独用于宿主自己的路由。
+- `SMSCodes`：验证码自行生成与校验——存 `HMAC-SHA256(HMACKey, code)`（`RegisterPhoneRoutes` 在 HMACKey 为空时用 JWT secret）、常量时间比较、一次性、默认 5 分钟过期、最多 5 次尝试、60 秒重发冷却、每号每天 10 条；**状态仅在单进程内存中**（多副本/重启会丢未用验证码，需要跨实例时请自备存储）。压缩时丢掉 24 小时前的发送时间、删除空键，仍超过软上限则按最后活动时间淘汰最旧的号码。验证码永远不会出现在响应或日志里（日志中手机号经 `MaskPhone` 脱敏）。
+- 限流：`SendLimiter`（`/sms/send` 与 `/fusion/token` 共用，默认每 IP 每小时 20 次）和 `LoginLimiter`（默认每 IP 10 分钟 30 次）。默认只认 `RemoteAddr`（`ClientIP`）。在反向代理后面时用 `WithTrustedProxies`（IP 或 CIDR，只解析来自这些代理的 `X-Forwarded-For`，从右向左跳过受信任代理）或 `WithClientIPResolver` 自定义。未配置时，客户端伪造的 `X-Forwarded-For` 不能换限流桶。`RateLimiter` 也可单独用于宿主自己的路由。
 - 错误码见上面的表。短信 / 融合认证路径字符串保持原样。
 - 只需要 JWT 时可单独使用 `Server.UserForPhone` 与 `Server.IssueToken`（仅 access）或 `Server.IssueTokens`（一对）。
 

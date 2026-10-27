@@ -17,7 +17,7 @@ dependencies:
   app_update:
     git:
       url: https://github.com/boqinai/CommonLibs.git
-      ref: app_update-v0.10.0
+      ref: app_update-v0.10.1
       path: app_update
 ```
 
@@ -54,7 +54,7 @@ if (result.status == UpdateCheckStatus.updateAvailable) {
 
 更新协议可选返回 `sha256`（64 位十六进制）和 `file_size`（字节数）。响应里的 `md5` 会被忽略。缓存命中路径也会再跑一遍包名与签名校验。提供哈希或大小后，原生下载服务会校验 APK 完整性；无论是否提供完整性元数据，原生层都会在下载落盘以及打开安装器前核对 APK 包名与当前应用一致，并核对签名证书或合法的证书轮换链。插件同一时间只允许一个下载任务；重复启动会返回 `download_in_progress`。`downloadTimeout` 限制总下载时长，`inactivityTimeout` 限制两次进度事件之间允许的最长静默时间。事件流中断或迟迟没有事件时，会改用 `getDownloadProgress` 轮询。
 
-下载失败时可通过 `onFailure` 获取结构化的 `UpdateFailure`；使用 `UpdateDownloadController` 时，可读取其 `failure` 字段展示具体错误原因。Android 15 对 `dataSync` 前台服务触发系统时限时，插件会持久化 `data_sync_timeout` 失败状态、停止服务并保留失败通知，Dart 侧映射为 `UpdateFailureCode.timedOut`。
+下载失败时可通过 `onFailure` 获取结构化的 `UpdateFailure`；使用 `UpdateDownloadController` 时，可读取其 `failure` 字段展示具体错误原因。Android 15 对 `dataSync` 前台服务触发系统时限时，插件会持久化 `data_sync_timeout` 失败状态、停止服务并保留失败通知，Dart 侧映射为 `UpdateFailureCode.timedOut`。超时和下载线程用同一次 compare-and-set 抢终态，后到的一方不能再把结果写成成功，也不能移动 APK 或改通知。
 
 发布前仍应在目标 ROM 真机验证未知来源授权返回、下载中进程重建，以及长时间弱网下载。普通 Dart 超时或失败提示不等同于 Android 15 系统前台服务超时处理。
 

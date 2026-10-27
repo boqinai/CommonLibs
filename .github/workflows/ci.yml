@@ -94,3 +94,44 @@ jobs:
       - uses: astral-sh/ruff-action@v3
       - run: python -m unittest discover -v
       - run: python -m compileall -q .
+
+  native-races:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Kotlin compiler
+        run: |
+          set -eu
+          ver=2.0.21
+          curl -fsSL -o /tmp/kotlin.zip "https://github.com/JetBrains/kotlin/releases/download/v${ver}/kotlin-compiler-${ver}.zip"
+          unzip -q /tmp/kotlin.zip -d /opt
+          echo "/opt/kotlinc/bin" >> "$GITHUB_PATH"
+      - name: Android download terminal-state race
+        run: |
+          set -eu
+          kotlinc \
+            app_update/android/src/main/kotlin/com/boqinai/app_update/DownloadTaskGate.kt \
+            app_update/android/src/test/kotlin/com/boqinai/app_update/DownloadTaskGateTest.kt \
+            -include-runtime -d /tmp/download-gate.jar
+          java -jar /tmp/download-gate.jar
+      - name: Android fusion start_failed race
+        run: |
+          set -eu
+          kotlinc \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionStartGate.kt \
+            fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionStartGateTest.kt \
+            -include-runtime -d /tmp/fusion-gate.jar
+          java -jar /tmp/fusion-gate.jar
+      - name: iOS fusion start_failed race
+        run: |
+          set -eu
+          gcc -Wall -Werror -std=c11 -pthread \
+            -I fusion_auth/ios/Classes \
+            fusion_auth/ios/Classes/FusionStartGate.c \
+            fusion_auth/ios/Tests/fusion_start_gate_test.c \
+            -o /tmp/fusion_start_gate_test
+          /tmp/fusion_start_gate_test

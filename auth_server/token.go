@@ -41,13 +41,22 @@ type TokenPair struct {
 // expiry. Revoke of an already-expired token should be a no-op. IsRevoked
 // must return false once exp has passed so callers can drop the row.
 //
+// Consume is the atomic revoke-if-active operation used by refresh
+// rotation: the check and the revoke happen in one critical section, and
+// only one caller wins. A database-backed store must do that inside one
+// transaction guarded by a unique constraint on jti. SQLite 3.22 has no
+// UPSERT and no RETURNING; SQLiteTokenBlacklist uses INSERT OR IGNORE and
+// RowsAffected. See that type for the statement shape.
+//
 // The default implementation is MemoryTokenBlacklist: process-local, no
 // database. Hosts that run more than one instance need a shared store
-// (WithTokenBlacklist). A SQLite store, if added by a host, should stay
-// compatible with SQLite 3.22 (no UPSERT or RETURNING).
+// (WithTokenBlacklist or NewSQLiteTokenBlacklist).
 type TokenBlacklist interface {
 	Revoke(ctx context.Context, jti string, exp time.Time) error
 	IsRevoked(ctx context.Context, jti string) (bool, error)
+	// Consume revokes jti when it is not already revoked and exp is still
+	// in the future. It returns true only for the caller that wins.
+	Consume(ctx context.Context, jti string, exp time.Time) (bool, error)
 }
 
 // MemoryTokenBlacklist keeps revoked jti values in memory until exp.
@@ -115,6 +124,28 @@ func (m *MemoryTokenBlacklist) IsRevoked(_ context.Context, jti string) (bool, e
 		delete(m.until, jti)
 		return false, nil
 	}
+	return true, nil
+}
+
+// Consume revokes jti if it is still active. Concurrent calls for the same
+// jti serialize on m.mu; at most one returns true.
+func (m *MemoryTokenBlacklist) Consume(_ context.Context, jti string, exp time.Time) (bool, error) {
+	now := m.clock()
+	if jti == "" || !exp.After(now) {
+		return false, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.until == nil {
+		m.until = map[string]time.Time{}
+	}
+	if len(m.until) > 1024 {
+		m.compactLocked(now)
+	}
+	if existing, ok := m.until[jti]; ok && existing.After(now) {
+		return false, nil
+	}
+	m.until[jti] = exp
 	return true, nil
 }
 
@@ -226,10 +257,6 @@ func (s *Server) Refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, CodeInvalidRefreshToken, "invalid refresh token")
 		return
 	}
-	if err := s.rejectRevoked(r.Context(), claims); err != nil {
-		writeError(w, http.StatusUnauthorized, CodeInvalidRefreshToken, "invalid refresh token")
-		return
-	}
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil || userID <= 0 {
 		writeError(w, http.StatusUnauthorized, CodeInvalidRefreshToken, "invalid refresh token")
@@ -245,9 +272,16 @@ func (s *Server) Refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, CodeInternalError, "login failed")
 		return
 	}
+	// Consume is check-and-revoke in one critical section. Two refreshes of
+	// the same token cannot both observe "not revoked" and then both revoke.
 	if s.blacklist != nil {
-		if err := s.blacklist.Revoke(r.Context(), claims.ID, claims.ExpiresAt.Time); err != nil {
+		won, err := s.blacklist.Consume(r.Context(), claims.ID, claims.ExpiresAt.Time)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, CodeInternalError, "token revocation failed")
+			return
+		}
+		if !won {
+			writeError(w, http.StatusUnauthorized, CodeInvalidRefreshToken, "invalid refresh token")
 			return
 		}
 	}

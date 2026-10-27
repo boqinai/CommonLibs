@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -135,16 +136,57 @@ func (s *SMSCodes) hashCode(code string) [32]byte {
 
 const smsMapSoftCap = 10_000
 
+type sendActivity struct {
+	phone string
+	last  time.Time
+}
+
+// compactLocked drops send timestamps older than 24h, deletes empty keys,
+// and if the send map is still above smsMapSoftCap evicts the phones whose
+// last activity is oldest. Codes for an evicted phone are dropped with it.
+// Callers must hold s.mu.
 func (s *SMSCodes) compactLocked(now time.Time) {
+	if s.sends == nil {
+		s.sends = map[string][]time.Time{}
+	}
+	activities := make([]sendActivity, 0, len(s.sends))
 	for phone, times := range s.sends {
-		if len(times) == 0 {
-			delete(s.sends, phone)
+		kept := make([]time.Time, 0, len(times))
+		var last time.Time
+		for _, ts := range times {
+			if now.Sub(ts) >= 24*time.Hour {
+				continue
+			}
+			kept = append(kept, ts)
+			if last.IsZero() || ts.After(last) {
+				last = ts
+			}
 		}
+		if len(kept) == 0 {
+			delete(s.sends, phone)
+			continue
+		}
+		s.sends[phone] = kept
+		activities = append(activities, sendActivity{phone: phone, last: last})
 	}
 	for phone, c := range s.codes {
-		if now.After(c.expires) {
+		if c == nil || now.After(c.expires) {
 			delete(s.codes, phone)
 		}
+	}
+	if len(s.sends) <= smsMapSoftCap {
+		return
+	}
+	sort.Slice(activities, func(i, j int) bool {
+		if activities[i].last.Equal(activities[j].last) {
+			return activities[i].phone < activities[j].phone
+		}
+		return activities[i].last.Before(activities[j].last)
+	})
+	extra := len(s.sends) - smsMapSoftCap
+	for i := 0; i < extra && i < len(activities); i++ {
+		delete(s.sends, activities[i].phone)
+		delete(s.codes, activities[i].phone)
 	}
 }
 
@@ -253,8 +295,10 @@ type PhoneRoutes struct {
 	// FusionToken serves POST {auth}/fusion/token {"platform":"android|ios"}
 	// with the SDK init payload (host-specific scheme codes).
 	FusionToken func(ctx context.Context, platform string) (any, error)
-	// SendLimiter / LoginLimiter cap requests per ClientIP; default
+	// SendLimiter / LoginLimiter cap requests per client IP; default
 	// 20/hour and 30/10min. Shared across routes of the same kind.
+	// The address comes from Server's client-IP policy (RemoteAddr unless
+	// WithTrustedProxies or WithClientIPResolver is set).
 	SendLimiter  *RateLimiter
 	LoginLimiter *RateLimiter
 	Prefix       string // default "/api/auth"
@@ -278,24 +322,24 @@ func (s *Server) RegisterPhoneRoutes(mux *http.ServeMux, cfg PhoneRoutes) {
 		if len(cfg.SMS.HMACKey) == 0 {
 			cfg.SMS.HMACKey = append([]byte(nil), s.secret...)
 		}
-		mux.Handle(prefix+"/sms/send", limited(send, s.SendSMSCode(cfg.SMS)))
-		mux.Handle(prefix+"/sms/login", limited(login, s.PhoneLogin(cfg.SMS)))
+		mux.Handle(prefix+"/sms/send", s.maybeLimited(send, s.SendSMSCode(cfg.SMS)))
+		mux.Handle(prefix+"/sms/login", s.maybeLimited(login, s.PhoneLogin(cfg.SMS)))
 	}
 	if cfg.Fusion != nil {
-		mux.Handle(prefix+"/fusion/login", limited(login, s.PhoneLogin(cfg.Fusion)))
+		mux.Handle(prefix+"/fusion/login", s.maybeLimited(login, s.PhoneLogin(cfg.Fusion)))
 	}
 	if cfg.FusionToken != nil {
-		mux.Handle(prefix+"/fusion/token", limited(send, fusionToken(cfg.FusionToken)))
+		mux.Handle(prefix+"/fusion/token", s.maybeLimited(send, fusionToken(cfg.FusionToken)))
 	}
 }
 
-func limited(l *RateLimiter, next http.Handler) http.Handler {
+func limited(l *RateLimiter, clientIP func(*http.Request) string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
 			return
 		}
-		if !l.Allow(ClientIP(r), time.Now()) {
+		if !l.Allow(clientIP(r), time.Now()) {
 			writeError(w, http.StatusTooManyRequests, CodeTooManyRequests, "too many requests")
 			return
 		}

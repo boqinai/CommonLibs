@@ -1,3 +1,7 @@
+## 0.10.1
+
+- Android 15 `onTimeout` and the download worker share one `DownloadTaskGate`. `SUCCESS`, `FAILED`, `CANCELLED`, and `TIMED_OUT` are compare-and-set from `RUNNING`, so a timeout can no longer be overwritten by `STATUS_SUCCESSFUL`. Only the owner moves the APK, writes the terminal status, and updates the notification.
+
 ## 0.10.0
 
 - Integrity checks use SHA-256 and `file_size`. An `md5` field in the update-center response is ignored and is not used to accept an APK.

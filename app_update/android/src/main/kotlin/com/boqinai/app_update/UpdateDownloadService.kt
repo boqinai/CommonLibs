@@ -32,7 +32,8 @@ class UpdateDownloadService : Service() {
     private val cancellations = ConcurrentHashMap<Long, AtomicBoolean>()
     private val startIds = ConcurrentHashMap<Long, Int>()
     private val versions = ConcurrentHashMap<Long, String>()
-    private val timedOut = ConcurrentHashMap.newKeySet<Long>()
+    private val gates = ConcurrentHashMap<Long, DownloadTaskGate>()
+    private val publishLocks = ConcurrentHashMap<Long, Any>()
 
     override fun onCreate() {
         super.onCreate()
@@ -68,27 +69,30 @@ class UpdateDownloadService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
-        val id = startIds.entries.firstOrNull { it.value == startId }?.key ?: return
-        timedOut.add(id)
-        cancellations[id]?.set(true)
-        val current = states[id]
-        val downloaded = current?.get("bytesDownloaded") as? Long ?: 0L
-        val total = current?.get("totalBytes") as? Long ?: 0L
-        save(
-            id,
-            STATUS_FAILED,
-            downloaded,
-            total,
-            ERROR_DATA_SYNC_TIMEOUT,
-            "Android stopped the dataSync foreground service after its time limit",
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_DETACH)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(false)
+        val id = startIds.entries.firstOrNull { it.value == startId }?.key
+        if (id != null) {
+            cancellations[id]?.set(true)
+            // Only the CAS winner writes status and the notification. A worker
+            // that already reached SUCCESS must not be overwritten, and a
+            // timeout that wins must be the only one that publishes failure.
+            locked(id) {
+                if (tryComplete(id, TaskState.TIMED_OUT)) {
+                    val current = states[id]
+                    val downloaded = current?.get("bytesDownloaded") as? Long ?: 0L
+                    val total = current?.get("totalBytes") as? Long ?: 0L
+                    save(
+                        id,
+                        STATUS_FAILED,
+                        downloaded,
+                        total,
+                        ERROR_DATA_SYNC_TIMEOUT,
+                        "Android stopped the dataSync foreground service after its time limit",
+                    )
+                    show(id, buildNotification(versions[id].orEmpty(), downloaded, total, "下载超时，请重试", false))
+                }
+            }
         }
-        show(id, buildNotification(versions[id].orEmpty(), downloaded, total, "下载超时，请重试", false))
+        detachForeground(removeNotification = false)
         stopSelf(startId)
     }
 
@@ -104,6 +108,8 @@ class UpdateDownloadService : Service() {
         cancellations[id] = cancelled
         startIds[id] = startId
         versions[id] = version
+        gates[id] = DownloadTaskGate()
+        publishLocks[id] = Any()
         save(id, STATUS_PENDING, 0, 0)
         val initialNotification = buildNotification(version, 0, 0, "准备下载…", true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -143,7 +149,15 @@ class UpdateDownloadService : Service() {
         var connection: HttpURLConnection? = null
         try {
             while (wifiOnly && !hasWifi() && !cancelled.get()) {
-                show(id, buildNotification(version, 0, 0, "等待 Wi-Fi…", true))
+                val stillRunning = locked(id) {
+                    if (gates[id]?.get() != TaskState.RUNNING) {
+                        false
+                    } else {
+                        show(id, buildNotification(version, 0, 0, "等待 Wi-Fi…", true))
+                        true
+                    }
+                }
+                if (!stillRunning) break
                 Thread.sleep(2_000)
             }
             check(!cancelled.get()) { "cancelled" }
@@ -179,14 +193,22 @@ class UpdateDownloadService : Service() {
                         val percent = percentage(downloaded, total)
                         val now = System.currentTimeMillis()
                         if (percent != lastPercent || now - lastPublishedAt >= 500) {
-                            save(id, STATUS_RUNNING, downloaded, total)
-                            show(id, buildNotification(
-                                version,
-                                downloaded,
-                                total,
-                                if (total > 0) "正在下载… $percent%" else "正在下载…",
-                                total <= 0,
-                            ))
+                            val published = locked(id) {
+                                if (gates[id]?.get() != TaskState.RUNNING) {
+                                    false
+                                } else {
+                                    save(id, STATUS_RUNNING, downloaded, total)
+                                    show(id, buildNotification(
+                                        version,
+                                        downloaded,
+                                        total,
+                                        if (total > 0) "正在下载… $percent%" else "正在下载…",
+                                        total <= 0,
+                                    ))
+                                    true
+                                }
+                            }
+                            if (!published) break
                             lastPercent = percent
                             lastPublishedAt = now
                         }
@@ -205,68 +227,98 @@ class UpdateDownloadService : Service() {
             val validation = ApkInstallValidator.validate(this, partial)
             if (!validation.valid) {
                 partial.delete()
-                save(
-                    id,
-                    STATUS_FAILED,
-                    downloaded,
-                    total,
-                    validation.code ?: "invalid_apk",
-                    validation.message ?: "APK validation failed",
-                )
-                show(id, buildNotification(version, downloaded, total, "安装包校验失败", false))
+                locked(id) {
+                    if (tryComplete(id, TaskState.FAILED)) {
+                        save(
+                            id,
+                            STATUS_FAILED,
+                            downloaded,
+                            total,
+                            validation.code ?: "invalid_apk",
+                            validation.message ?: "APK validation failed",
+                        )
+                        show(id, buildNotification(version, downloaded, total, "安装包校验失败", false))
+                    }
+                }
+                return
+            }
+            // Stage beside the install path, then claim SUCCESS, then move.
+            // A timeout that wins deletes the staged file and does not publish success.
+            val ready = File(destination.absolutePath + ".ready")
+            if (ready.exists()) ready.delete()
+            if (!partial.renameTo(ready)) {
+                partial.copyTo(ready, overwrite = true)
+                partial.delete()
+            }
+            if (!locked(id) { tryComplete(id, TaskState.SUCCESS) }) {
+                ready.delete()
                 return
             }
             if (destination.exists()) destination.delete()
-            if (!partial.renameTo(destination)) {
-                partial.copyTo(destination, overwrite = true)
-                partial.delete()
+            if (!ready.renameTo(destination)) {
+                ready.copyTo(destination, overwrite = true)
+                ready.delete()
             }
-            save(id, STATUS_SUCCESSFUL, downloaded, total)
-            show(id, buildNotification(version, downloaded, total, "下载完成 100%", false, destination))
+            locked(id) {
+                save(id, STATUS_SUCCESSFUL, downloaded, total)
+                show(id, buildNotification(version, downloaded, total, "下载完成 100%", false, destination))
+            }
         } catch (error: Exception) {
             partial.delete()
-            if (timedOut.contains(id)) {
-                // onTimeout has already persisted and published the terminal failure.
-            } else if (cancelled.get()) {
-                clear(id)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
+            File(destination.absolutePath + ".ready").delete()
+            locked(id) {
+                when {
+                    isTerminal(id) -> Unit
+                    cancelled.get() && tryComplete(id, TaskState.CANCELLED) -> {
+                        clear(id)
+                        detachForeground(removeNotification = true)
+                        notifications.cancel(notificationId(id))
+                    }
+                    tryComplete(id, TaskState.FAILED) -> {
+                        save(id, STATUS_FAILED, 0, 0, "download_failed", error.message ?: "Download failed")
+                        show(id, buildNotification(version, 0, 0, "下载失败", false))
+                    }
                 }
-                notifications.cancel(notificationId(id))
-            } else {
-                save(id, STATUS_FAILED, 0, 0, "download_failed", error.message ?: "Download failed")
-                show(id, buildNotification(version, 0, 0, "下载失败", false))
             }
         } finally {
             connection?.disconnect()
-            val wasCancelled = cancelled.get()
-            val wasTimedOut = timedOut.remove(id)
+            val terminal = gates[id]?.get()
             cancellations.remove(id)
             startIds.remove(id)
             versions.remove(id)
+            gates.remove(id)
+            publishLocks.remove(id)
             activeDownloadId.compareAndSet(id, NO_ACTIVE_DOWNLOAD)
             if (cancellations.isEmpty()) {
-                if (wasCancelled && !wasTimedOut) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        stopForeground(true)
-                    }
+                val cancelledTerminal = terminal == TaskState.CANCELLED
+                detachForeground(removeNotification = cancelledTerminal)
+                if (cancelledTerminal) {
                     notifications.cancel(notificationId(id))
-                } else {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        stopForeground(false)
-                    }
                 }
                 stopSelf()
             }
+        }
+    }
+
+    private fun tryComplete(id: Long, terminal: TaskState): Boolean =
+        gates[id]?.tryComplete(terminal) == true
+
+    private inline fun <T> locked(id: Long, block: () -> T): T {
+        val lock = publishLocks[id] ?: return block()
+        return synchronized(lock) { block() }
+    }
+
+    private fun isTerminal(id: Long): Boolean {
+        val state = gates[id]?.get() ?: return false
+        return state != TaskState.RUNNING
+    }
+
+    private fun detachForeground(removeNotification: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(if (removeNotification) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(removeNotification)
         }
     }
 
@@ -354,14 +406,13 @@ class UpdateDownloadService : Service() {
 
     private fun cancelInternal(id: Long) {
         cancellations[id]?.set(true)
-        clear(id)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
+        locked(id) {
+            val gate = gates[id]
+            if (gate != null && !gate.tryComplete(TaskState.CANCELLED)) return@locked
+            clear(id)
+            detachForeground(removeNotification = true)
+            notifications.cancel(notificationId(id))
         }
-        notifications.cancel(notificationId(id))
     }
 
     private fun show(id: Long, notification: Notification) =
@@ -378,6 +429,7 @@ class UpdateDownloadService : Service() {
         errorCode: String? = null,
         errorMessage: String? = null,
     ) {
+        if (!mayWriteStatus(id, status)) return
         val event = mutableMapOf<String, Any>(
             "downloadId" to id,
             "status" to status,
@@ -400,6 +452,16 @@ class UpdateDownloadService : Service() {
                 .apply()
         }
         DownloadEventBus.publish(event)
+    }
+
+    private fun mayWriteStatus(id: Long, status: Int): Boolean {
+        val state = gates[id]?.get() ?: return true
+        return when (state) {
+            TaskState.RUNNING -> status == STATUS_PENDING || status == STATUS_RUNNING
+            TaskState.SUCCESS -> status == STATUS_SUCCESSFUL
+            TaskState.FAILED, TaskState.TIMED_OUT -> status == STATUS_FAILED
+            TaskState.CANCELLED -> false
+        }
     }
 
     private fun clear(id: Long) {

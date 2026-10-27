@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -158,8 +159,15 @@ func TestRateLimiterAndClientIP(t *testing.T) {
 		t.Fatal(ClientIP(r))
 	}
 	r.Header.Set("X-Forwarded-For", "6.6.6.6, 1.2.3.4")
-	if ClientIP(r) != "1.2.3.4" {
-		t.Fatal(ClientIP(r))
+	if ClientIP(r) != "10.0.0.1" {
+		t.Fatalf("default ClientIP trusted XFF: %s", ClientIP(r))
+	}
+	trusted, err := parseTrustedProxies([]string{"10.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := clientIP(r, trusted); got != "1.2.3.4" {
+		t.Fatalf("trusted proxy client: %s", got)
 	}
 	if MaskPhone("13800138000") != "138******00" {
 		t.Fatal(MaskPhone("13800138000"))
@@ -223,5 +231,159 @@ func TestRegisterRoutesRateLimit(t *testing.T) {
 	}
 	if c := post("/api/auth/register", `{"phone":"13800138003","password":"12345678"}`); c != 429 {
 		t.Fatalf("expected 429, got %d", c)
+	}
+}
+
+func TestSpoofedXForwardedForDoesNotBypassDefaultLimit(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	auth := New(db, []byte("secret"), WithBcryptCost(4),
+		WithCredentialRateLimiters(NewRateLimiter(1, time.Hour), NewRateLimiter(1, time.Hour)))
+	if err := auth.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+	post := func(phone, xff string) int {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"phone":"`+phone+`","password":"12345678"}`))
+		req.RemoteAddr = "203.0.113.8:4000"
+		req.Header.Set("X-Forwarded-For", xff)
+		mux.ServeHTTP(res, req)
+		return res.Code
+	}
+	if c := post("13800138011", "1.1.1.1"); c != http.StatusCreated {
+		t.Fatal(c)
+	}
+	if c := post("13800138012", "8.8.8.8, 2.2.2.2"); c != http.StatusTooManyRequests {
+		t.Fatalf("spoofed XFF bypassed the default limit: %d", c)
+	}
+}
+
+func TestTrustedProxyUsesForwardedClient(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	auth := New(db, []byte("secret"), WithBcryptCost(4),
+		WithTrustedProxies("10.0.0.0/8"),
+		WithCredentialRateLimiters(NewRateLimiter(1, time.Hour), NewRateLimiter(1, time.Hour)))
+	if err := auth.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+	post := func(phone, xff string) int {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"phone":"`+phone+`","password":"12345678"}`))
+		req.RemoteAddr = "10.0.0.1:443"
+		req.Header.Set("X-Forwarded-For", xff)
+		mux.ServeHTTP(res, req)
+		return res.Code
+	}
+	if c := post("13800138101", "6.6.6.6, 198.51.100.10"); c != http.StatusCreated {
+		t.Fatal(c)
+	}
+	if c := post("13800138102", "9.9.9.9, 198.51.100.10"); c != http.StatusTooManyRequests {
+		t.Fatalf("same client behind the proxy was counted twice: %d", c)
+	}
+	if c := post("13800138103", "198.51.100.11"); c != http.StatusCreated {
+		t.Fatalf("second client behind the proxy was blocked: %d", c)
+	}
+}
+
+func TestClientIPResolverOverridesPeer(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	auth := New(db, []byte("secret"), WithBcryptCost(4),
+		WithCredentialRateLimiters(NewRateLimiter(1, time.Hour), NewRateLimiter(1, time.Hour)),
+		WithClientIPResolver(func(r *http.Request) string { return r.Header.Get("X-Client") }))
+	if err := auth.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+	post := func(phone, client string) int {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"phone":"`+phone+`","password":"12345678"}`))
+		req.RemoteAddr = "203.0.113.8:9"
+		req.Header.Set("X-Client", client)
+		mux.ServeHTTP(res, req)
+		return res.Code
+	}
+	if post("13800138201", "client-a") != http.StatusCreated || post("13800138202", "client-b") != http.StatusCreated {
+		t.Fatal("resolver did not split keys")
+	}
+	if post("13800138203", "client-a") != http.StatusTooManyRequests {
+		t.Fatal("resolver key was not limited")
+	}
+}
+
+func TestSMSCompactBoundsMemory(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	s := &SMSCodes{
+		Sender:   &captureSender{},
+		HMACKey:  []byte("secret"),
+		Cooldown: time.Nanosecond,
+		Now:      func() time.Time { return now },
+	}
+	s.sends = map[string][]time.Time{}
+	s.codes = map[string]*smsCode{}
+	total := smsMapSoftCap + 50
+	for i := range total {
+		phone := fmt.Sprintf("13%09d", i)
+		ts := base.Add(time.Duration(i) * time.Second)
+		s.sends[phone] = []time.Time{ts.Add(-48 * time.Hour), ts}
+		s.codes[phone] = &smsCode{expires: ts.Add(time.Minute)}
+	}
+	now = base.Add(time.Duration(total) * time.Second)
+	s.mu.Lock()
+	s.compactLocked(now)
+	n := len(s.sends)
+	_, oldest := s.sends["13000000000"]
+	newest := fmt.Sprintf("13%09d", total-1)
+	stamps := append([]time.Time(nil), s.sends[newest]...)
+	s.mu.Unlock()
+	if n != smsMapSoftCap || oldest || len(stamps) != 1 {
+		t.Fatalf("sends=%d oldestKept=%v newestStamps=%v", n, oldest, stamps)
+	}
+	now = now.Add(24*time.Hour + time.Second)
+	s.mu.Lock()
+	s.compactLocked(now)
+	left, codesLeft := len(s.sends), len(s.codes)
+	s.mu.Unlock()
+	if left != 0 || codesLeft != 0 {
+		t.Fatalf("after 24h sends=%d codes=%d", left, codesLeft)
+	}
+
+	old := now.Add(-25 * time.Hour)
+	s.mu.Lock()
+	s.sends = map[string][]time.Time{}
+	s.codes = map[string]*smsCode{}
+	for i := range smsMapSoftCap + 5 {
+		s.sends[fmt.Sprintf("13%09d", i)] = []time.Time{old}
+	}
+	s.mu.Unlock()
+	if err := s.Send(context.Background(), "13900000000"); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.sends) != 1 {
+		t.Fatalf("send compact left %d keys", len(s.sends))
+	}
+	if _, ok := s.sends["13900000000"]; !ok {
+		t.Fatal("new phone evicted")
+	}
+	if _, ok := s.sends["13000000000"]; ok {
+		t.Fatal("stale phone survived Send compact")
 	}
 }

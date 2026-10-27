@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import com.alicom.fusion.auth.AlicomFusionAuthCallBack
 import com.alicom.fusion.auth.AlicomFusionBusiness
 import com.alicom.fusion.auth.AlicomFusionLog
@@ -32,7 +33,8 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     private var business: AlicomFusionBusiness? = null
     private var templateId = ""
     @Volatile private var authToken = ""
-    private var pending: MethodChannel.Result? = null
+    private val pending = AtomicReference<MethodChannel.Result?>(null)
+    private val gate = FusionStartGate()
     private var halfWay: HalfWayVerifyResult? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -42,7 +44,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        release()
+        release("cancelled", "")
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) { activity = binding.activity }
@@ -50,7 +52,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) { activity = binding.activity }
     override fun onDetachedFromActivity() {
         activity = null
-        release()
+        release("cancelled", "")
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -61,7 +63,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
                 result.success(null)
             }
             "cancel" -> {
-                release()
+                release("cancelled", "")
                 result.success(null)
             }
             else -> result.notImplemented()
@@ -76,9 +78,14 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         if (token.isEmpty() || scheme.isEmpty() || template.isEmpty()) {
             return result.error("bad_args", "token, schemeCode and templateId are required", null)
         }
-        if (pending != null) return result.error("busy", "A fusion scene is already running", null)
-        release()
-        pending = result
+        if (pending.get() != null) return result.error("busy", "A fusion scene is already running", null)
+        destroyBusiness()
+        gate.reset()
+        if (!gate.arm() || !pending.compareAndSet(null, result)) {
+            gate.reset()
+            pending.compareAndSet(result, null)
+            return result.error("busy", "A fusion scene is already running", null)
+        }
         templateId = template
         authToken = token
         try {
@@ -91,8 +98,9 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
             b.setAlicomFusionAuthCallBack(callback)
             b.startSceneWithTemplateId(act, template)
         } catch (t: Throwable) {
-            resolve(null, "start_failed", t.message ?: t.javaClass.simpleName)
-            release()
+            // One terminal status. release used to complete pending as cancelled
+            // after resolve posted start_failed asynchronously.
+            release("start_failed", t.message ?: t.javaClass.simpleName)
         }
     }
 
@@ -103,13 +111,32 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         if (hw != null) hw.verifyResult(success) else b.continueSceneWithTemplateId(templateId, success)
     }
 
-    private fun resolve(token: String?, code: String, message: String) = main.post {
-        val r = pending ?: return@post
-        pending = null
-        r.success(mapOf("verifyToken" to token, "code" to code, "message" to message))
+    private fun resolve(token: String?, code: String, message: String) {
+        val won = gate.complete(code, message, token) ?: return
+        deliver(won)
     }
 
-    private fun release() {
+    private fun release(code: String, message: String) {
+        destroyBusiness()
+        val won = gate.complete(code, message, null) ?: return
+        deliver(won)
+    }
+
+    private fun deliver(terminal: FusionTerminal) {
+        val result = pending.getAndSet(null) ?: return
+        val payload = mapOf(
+            "verifyToken" to terminal.verifyToken,
+            "code" to terminal.code,
+            "message" to terminal.message,
+        )
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            result.success(payload)
+        } else {
+            main.post { result.success(payload) }
+        }
+    }
+
+    private fun destroyBusiness() {
         val b = business
         business = null
         halfWay = null
@@ -118,10 +145,6 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
                 if (templateId.isNotEmpty()) b.stopSceneWithTemplateId(templateId)
                 b.destory()
             } catch (_: Throwable) {}
-        }
-        pending?.let {
-            pending = null
-            it.success(mapOf("verifyToken" to null, "code" to "cancelled", "message" to ""))
         }
     }
 
@@ -174,7 +197,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
 
         override fun onSDKTokenAuthFailure(token: AlicomFusionAuthToken?, event: AlicomFusionEvent?) {
             resolve(null, event.code(), event.msg())
-            main.post { release() }
+            main.post { release("cancelled", "") }
         }
 
         override fun onVerifySuccess(token: String?, nodeName: String?, event: AlicomFusionEvent?) {
@@ -195,7 +218,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
 
         override fun onTemplateFinish(event: AlicomFusionEvent?) {
             resolve(null, event.code(), event.msg())
-            main.post { release() }
+            main.post { release("cancelled", "") }
         }
 
         override fun onAuthEvent(event: AlicomFusionEvent?) {}

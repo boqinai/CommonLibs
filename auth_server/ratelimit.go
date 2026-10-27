@@ -1,6 +1,7 @@
 package authserver
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -83,20 +84,95 @@ func (l *RateLimiter) compactLocked(now time.Time) {
 	}
 }
 
-// ClientIP returns the last X-Forwarded-For hop (the one appended by the
-// host's own reverse proxy; earlier hops are client-supplied), else the
-// peer address. Hosts not behind a proxy that sets X-Forwarded-For should
-// strip the header.
+// ClientIPResolver extracts the address used as a rate-limit key.
+// WithClientIPResolver installs one and skips RemoteAddr / X-Forwarded-For handling.
+type ClientIPResolver func(r *http.Request) string
+
+// ClientIP returns the TCP peer from RemoteAddr. It ignores X-Forwarded-For.
+// A client can set that header itself, so it is only consulted when the
+// immediate peer is a trusted proxy (WithTrustedProxies) or the host
+// installs a ClientIPResolver.
 func ClientIP(r *http.Request) string {
-	if f := r.Header.Get("X-Forwarded-For"); f != "" {
-		parts := strings.Split(f, ",")
-		if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-			return ip
+	return remoteHost(r)
+}
+
+// clientIP applies trusted-proxy rules. An empty trusted list matches ClientIP.
+// When the peer is trusted, X-Forwarded-For is walked from the right and the
+// first hop that is not itself a trusted proxy is the client. Spoofed values
+// to the left of the real client are ignored.
+func clientIP(r *http.Request, trusted []*net.IPNet) string {
+	peer := remoteHost(r)
+	if len(trusted) == 0 || !ipInNets(peer, trusted) {
+		return peer
+	}
+	var hops []string
+	for _, part := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		if hop := strings.TrimSpace(part); hop != "" {
+			hops = append(hops, hop)
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if len(hops) == 0 {
+		return peer
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		if !ipInNets(hops[i], trusted) {
+			return hops[i]
+		}
+	}
+	return hops[0]
+}
+
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err != nil {
-		return r.RemoteAddr
+		return strings.TrimSpace(r.RemoteAddr)
 	}
 	return host
+}
+
+func parseTrustedProxies(values []string) ([]*net.IPNet, error) {
+	out := make([]*net.IPNet, 0, len(values))
+	for _, raw := range values {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			return nil, fmt.Errorf("empty trusted proxy")
+		}
+		if strings.Contains(v, "/") {
+			_, network, err := net.ParseCIDR(v)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", v, err)
+			}
+			out = append(out, network)
+			continue
+		}
+		ip := net.ParseIP(v)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid trusted proxy %q", v)
+		}
+		if v4 := ip.To4(); v4 != nil {
+			out = append(out, &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)})
+			continue
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)})
+	}
+	return out, nil
+}
+
+func ipInNets(host string, nets []*net.IPNet) bool {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	for _, network := range nets {
+		candidate := ip
+		if len(network.IP) == net.IPv4len {
+			if v4 := ip.To4(); v4 != nil {
+				candidate = v4
+			}
+		}
+		if network.Contains(candidate) {
+			return true
+		}
+	}
+	return false
 }

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -393,6 +394,13 @@ func (f flakyBlacklist) IsRevoked(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+func (f flakyBlacklist) Consume(context.Context, string, time.Time) (bool, error) {
+	if f.failRevoke {
+		return false, errors.New("store down")
+	}
+	return true, nil
+}
+
 func TestBlacklistFailuresAndMemoryTTL(t *testing.T) {
 	_, _, mux := newTokenServer(t, WithTokenBlacklist(flakyBlacklist{failRead: true}))
 	if code, _ := postAuth(t, mux, "/api/auth/register", `{"phone":"13800000000","password":"12345678"}`, ""); code != http.StatusCreated {
@@ -466,6 +474,93 @@ func TestBlacklistFailuresAndMemoryTTL(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestConcurrentRefreshSingleWinner(t *testing.T) {
+	_, db, mux := newTokenServer(t)
+	db.SetMaxOpenConns(1)
+	if code, _ := postAuth(t, mux, "/api/auth/register", `{"phone":"13800000000","password":"12345678"}`, ""); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	_, login := postAuth(t, mux, "/api/auth/login", `{"phone":"13800000000","password":"12345678"}`, "")
+	refresh := login["refresh_token"].(string)
+	const n = 16
+	codes := make([]int, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", strings.NewReader(`{"refresh_token":"`+refresh+`"}`))
+			req.RemoteAddr = "203.0.113.9:9"
+			res := httptest.NewRecorder()
+			mux.ServeHTTP(res, req)
+			codes[i] = res.Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	wins := 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusOK:
+			wins++
+		case http.StatusUnauthorized:
+		default:
+			t.Fatalf("unexpected status %d in %v", code, codes)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("refresh wins=%d codes=%v", wins, codes)
+	}
+}
+
+func TestConsumeAtomic(t *testing.T) {
+	bl := NewMemoryTokenBlacklist()
+	now := time.Unix(1_700_000_000, 0)
+	bl.now = func() time.Time { return now }
+	exp := now.Add(time.Hour)
+	const n = 32
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			ok, err := bl.Consume(context.Background(), "same", exp)
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				wins.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Fatalf("wins=%d", wins.Load())
+	}
+	revoked, err := bl.IsRevoked(context.Background(), "same")
+	if err != nil || !revoked {
+		t.Fatalf("revoked=%v err=%v", revoked, err)
+	}
+	ok, err := bl.Consume(context.Background(), "same", exp)
+	if err != nil || ok {
+		t.Fatalf("second consume ok=%v err=%v", ok, err)
+	}
+	ok, err = bl.Consume(context.Background(), "gone", now.Add(-time.Second))
+	if err != nil || ok {
+		t.Fatal("expired jti consumed")
+	}
+	ok, err = bl.Consume(context.Background(), "", exp)
+	if err != nil || ok {
+		t.Fatal("empty jti consumed")
+	}
 }
 
 func TestErrorCodeValues(t *testing.T) {

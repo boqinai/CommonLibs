@@ -1,6 +1,6 @@
 name: fusion_auth
 description: Aliyun 融合认证 (fusion auth / 本机号码一键登录) bridge for Boqinai Flutter apps (Android and iOS).
-version: 0.3.0
+version: 0.3.1
 publish_to: none
 
 environment:

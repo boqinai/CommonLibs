@@ -1,4 +1,5 @@
 #import "FusionAuthPlugin.h"
+#import "FusionStartGate.h"
 #import <AlicomFusionAuth/AlicomFusionAuth.h>
 
 // start -> token auth -> (onSDKTokenAuthSuccess) startScene ->
@@ -13,9 +14,23 @@
 @property(nonatomic, copy) NSString *authToken;
 @property(nonatomic, assign) BOOL sceneStarted;
 @property(nonatomic, strong) FlutterMethodChannel *channel;
+@property(nonatomic, assign) FusionStartGate *gate;
 @end
 
 @implementation FusionAuthPlugin
+
+- (instancetype)init {
+  self = [super init];
+  if (self) {
+    _gate = FusionStartGateCreate();
+  }
+  return self;
+}
+
+- (void)dealloc {
+  FusionStartGateDestroy(_gate);
+  _gate = NULL;
+}
 
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar> *)registrar {
   FlutterMethodChannel *channel =
@@ -34,7 +49,7 @@
     [self finish:[args[@"success"] isEqual:@YES]];
     result(nil);
   } else if ([call.method isEqualToString:@"cancel"]) {
-    [self releaseScene];
+    [self releaseSceneWithCode:@"cancelled" message:@""];
     result(nil);
   } else {
     result(FlutterMethodNotImplemented);
@@ -62,7 +77,12 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
     result([FlutterError errorWithCode:@"no_activity" message:@"No foreground view controller" details:nil]);
     return;
   }
-  [self releaseScene];
+  [self destroyHandler];
+  FusionStartGateReset(self.gate);
+  if (!FusionStartGateArm(self.gate)) {
+    result([FlutterError errorWithCode:@"busy" message:@"A fusion scene is already running" details:nil]);
+    return;
+  }
   self.pending = result;
   self.templateId = template;
   self.authToken = token;
@@ -76,8 +96,9 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
     [h setFusionAuthDelegate:self];
     // startScene waits for onSDKTokenAuthSuccess, as in the SDK demo.
   } @catch (NSException *e) {
-    [self resolve:nil code:@"start_failed" message:e.reason ?: e.name];
-    [self releaseScene];
+    // One terminal status. resolve(start_failed) used to be posted, then
+    // releaseScene completed the same request synchronously as cancelled.
+    [self releaseSceneWithCode:@"start_failed" message:e.reason ?: e.name ?: @"start_failed"];
   }
 }
 
@@ -95,15 +116,38 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
 }
 
 - (void)resolve:(NSString *)token code:(NSString *)code message:(NSString *)message {
-  dispatch_async(dispatch_get_main_queue(), ^{
-    FlutterResult r = self.pending;
-    if (r == nil) return;
-    self.pending = nil;
-    r(@{@"verifyToken" : token ?: [NSNull null], @"code" : code ?: @"", @"message" : message ?: @""});
-  });
+  [self completeWithToken:token code:code message:message];
 }
 
-- (void)releaseScene {
+- (void)completeWithToken:(NSString *)token code:(NSString *)code message:(NSString *)message {
+  const char *codeUtf8 = code.length > 0 ? code.UTF8String : "";
+  const char *messageUtf8 = message.length > 0 ? message.UTF8String : "";
+  if (!FusionStartGateComplete(self.gate, codeUtf8, messageUtf8)) {
+    return;
+  }
+  FlutterResult r = self.pending;
+  self.pending = nil;
+  if (r == nil) return;
+  NSDictionary *payload = @{
+    @"verifyToken" : token ?: [NSNull null],
+    @"code" : code ?: @"",
+    @"message" : message ?: @"",
+  };
+  if ([NSThread isMainThread]) {
+    r(payload);
+  } else {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      r(payload);
+    });
+  }
+}
+
+- (void)releaseSceneWithCode:(NSString *)code message:(NSString *)message {
+  [self destroyHandler];
+  [self completeWithToken:nil code:code message:message ?: @""];
+}
+
+- (void)destroyHandler {
   AlicomFusionAuthHandler *h = self.handler;
   self.handler = nil;
   self.halfway = nil;
@@ -115,11 +159,6 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
     }
   }
   self.sceneStarted = NO;
-  FlutterResult r = self.pending;
-  if (r != nil) {
-    self.pending = nil;
-    r(@{@"verifyToken" : [NSNull null], @"code" : @"cancelled", @"message" : @""});
-  }
 }
 
 - (UIViewController *)topViewController {
@@ -172,7 +211,7 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
     UIViewController *vc = [self topViewController];
     if (vc == nil) {
       [self resolve:nil code:@"no_activity" message:@"No foreground view controller"];
-      [self releaseScene];
+      [self releaseSceneWithCode:@"cancelled" message:@""];
       return;
     }
     self.sceneStarted = YES;
@@ -184,7 +223,9 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
                     failToken:(AlicomFusionAuthToken *)failToken
                         error:(AlicomFusionEvent *)error {
   [self resolve:nil code:PFCode(error) message:PFMsg(error)];
-  dispatch_async(dispatch_get_main_queue(), ^{ [self releaseScene]; });
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self releaseSceneWithCode:@"cancelled" message:@""];
+  });
 }
 
 - (void)onVerifySuccess:(AlicomFusionAuthHandler *)handler
@@ -214,7 +255,9 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 
 - (void)onTemplateFinish:(AlicomFusionAuthHandler *)handler event:(AlicomFusionEvent *)event {
   [self resolve:nil code:PFCode(event) message:PFMsg(event)];
-  dispatch_async(dispatch_get_main_queue(), ^{ [self releaseScene]; });
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self releaseSceneWithCode:@"cancelled" message:@""];
+  });
 }
 
 // Progress notices (900003/900004 start/end loading etc.); the template keeps

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -75,20 +76,47 @@ func WithPhoneValidator(re *regexp.Regexp) Option {
 	}
 }
 
+// WithTrustedProxies enables X-Forwarded-For parsing for peers in this list.
+// Entries are IP addresses or CIDRs. The header is ignored for every other
+// peer, which is the default when this option is omitted. Invalid entries
+// panic. When WithClientIPResolver is also set, the resolver wins.
+func WithTrustedProxies(proxies ...string) Option {
+	return func(s *Server) {
+		parsed, err := parseTrustedProxies(proxies)
+		if err != nil {
+			panic("authserver: trusted proxy: " + err.Error())
+		}
+		s.trustedProxies = parsed
+	}
+}
+
+// WithClientIPResolver sets the rate-limit key function. It replaces both
+// RemoteAddr and trusted-proxy X-Forwarded-For handling. A nil resolver panics.
+func WithClientIPResolver(resolve ClientIPResolver) Option {
+	return func(s *Server) {
+		if resolve == nil {
+			panic("authserver: nil ClientIPResolver")
+		}
+		s.clientIPResolver = resolve
+	}
+}
+
 type Server struct {
-	store           UserStore
-	secret          []byte
-	dummyHash       []byte
-	tokenExpiry     time.Duration
-	refreshExpiry   time.Duration
-	blacklist       TokenBlacklist
-	bcryptCost      int
-	databaseTimeout time.Duration
-	registerLimiter *RateLimiter
-	loginLimiter    *RateLimiter
-	refreshLimiter  *RateLimiter
-	phoneValidator  *regexp.Regexp
-	minPasswordLen  int
+	store            UserStore
+	secret           []byte
+	dummyHash        []byte
+	tokenExpiry      time.Duration
+	refreshExpiry    time.Duration
+	blacklist        TokenBlacklist
+	bcryptCost       int
+	databaseTimeout  time.Duration
+	registerLimiter  *RateLimiter
+	loginLimiter     *RateLimiter
+	refreshLimiter   *RateLimiter
+	phoneValidator   *regexp.Regexp
+	minPasswordLen   int
+	trustedProxies   []*net.IPNet
+	clientIPResolver ClientIPResolver
 }
 
 func New(db *sql.DB, jwtSecret []byte, options ...Option) *Server {
@@ -163,19 +191,26 @@ func (s *Server) Init(ctx context.Context) error {
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/api/auth/register", maybeLimited(s.registerLimiter, http.HandlerFunc(s.Register)))
-	mux.Handle("/api/auth/login", maybeLimited(s.loginLimiter, http.HandlerFunc(s.Login)))
-	mux.Handle("/api/auth/refresh", maybeLimited(s.refreshLimiter, http.HandlerFunc(s.Refresh)))
+	mux.Handle("/api/auth/register", s.maybeLimited(s.registerLimiter, http.HandlerFunc(s.Register)))
+	mux.Handle("/api/auth/login", s.maybeLimited(s.loginLimiter, http.HandlerFunc(s.Login)))
+	mux.Handle("/api/auth/refresh", s.maybeLimited(s.refreshLimiter, http.HandlerFunc(s.Refresh)))
 	mux.Handle("/api/auth/logout", http.HandlerFunc(s.Logout))
 	mux.Handle("/api/auth/me", s.RequireAuth(http.HandlerFunc(s.Me)))
 	mux.Handle("/api/auth/profile", s.RequireAuth(http.HandlerFunc(s.UpdateProfile)))
 }
 
-func maybeLimited(l *RateLimiter, next http.Handler) http.Handler {
+func (s *Server) maybeLimited(l *RateLimiter, next http.Handler) http.Handler {
 	if l == nil {
 		return next
 	}
-	return limited(l, next)
+	return limited(l, s.requestClientIP, next)
+}
+
+func (s *Server) requestClientIP(r *http.Request) string {
+	if s.clientIPResolver != nil {
+		return s.clientIPResolver(r)
+	}
+	return clientIP(r, s.trustedProxies)
 }
 
 func (s *Server) Register(w http.ResponseWriter, r *http.Request) {

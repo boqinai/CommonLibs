@@ -1,0 +1,27 @@
+package com.boqinai.app_update
+
+import java.util.concurrent.atomic.AtomicReference
+
+/**
+ * Per-download terminal state. SUCCESS, FAILED, CANCELLED, and TIMED_OUT are
+ * reached only by a compare-and-set from RUNNING, so a timeout and the worker
+ * cannot both publish a result.
+ */
+enum class TaskState {
+    RUNNING,
+    SUCCESS,
+    FAILED,
+    CANCELLED,
+    TIMED_OUT,
+}
+
+class DownloadTaskGate {
+    private val state = AtomicReference(TaskState.RUNNING)
+
+    fun get(): TaskState = state.get()
+
+    fun tryComplete(next: TaskState): Boolean {
+        check(next != TaskState.RUNNING) { "terminal state required" }
+        return state.compareAndSet(TaskState.RUNNING, next)
+    }
+}
