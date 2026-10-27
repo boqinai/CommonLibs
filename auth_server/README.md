@@ -6,7 +6,7 @@
 
 Boqinai Go 服务共用的手机号/密码认证模块：SQLite 用户表、bcrypt 密码哈希、HS256 access/refresh JWT、注册、登录、`/me` 和认证中间件。
 
-错误响应为 `{"code":"invalid_credentials","message":"invalid phone or password"}`。客户端应根据稳定的 `code` 翻译提示，`message` 仅用于日志和兼容旧客户端。
+错误响应为 `{"code":"invalid_credentials","message":"invalid phone or password"}`。客户端应根据稳定的 `code` 翻译提示，`message` 用于日志。
 
 `Init` 会启用 SQLite WAL 和 5 秒 busy timeout，但不会修改宿主配置的连接池大小。
 
@@ -24,7 +24,7 @@ mux.Handle("/api/private", auth.RequireAuth(http.HandlerFunc(func(w http.Respons
 引用模块：
 
 ```bash
-go get github.com/boqinai/CommonLibs/auth_server@auth_server/v0.11.0
+go get github.com/boqinai/CommonLibs/auth_server@auth_server/v0.12.0
 ```
 
 使用 `modernc.org/sqlite` 连接池时，应在 DSN 上为每条连接设置 PRAGMA：
@@ -36,19 +36,19 @@ db, err := sql.Open(
 )
 ```
 
-`Init` 不会修改宿主的连接池大小。`RegisterRoutes` 自带按 IP 限流（注册默认每小时 20 次，登录默认 10 分钟 30 次），可用 `WithCredentialRateLimiters` 自定义或 `WithoutCredentialRateLimit` 关闭（测试用）。生产仍建议在反向代理再加一层。默认密码 8–72 字节；手机号默认仍是宽松的 6–32 字节校验，新应用建议 `WithPhoneValidator(MainlandPhone)`。`UpdateProfile` 不依赖 SQLite `RETURNING`（兼容 3.22+）。
+`Init` 不会修改宿主的连接池大小。`RegisterRoutes` 自带按 IP 限流（注册默认每小时 20 次，登录默认 10 分钟 30 次），可用 `WithCredentialRateLimiters` 自定义或 `WithoutCredentialRateLimit` 关闭（测试用）。生产仍建议在反向代理再加一层。默认密码 8–72 字节。密码注册/登录的手机号默认是 `MainlandPhone`（大陆 11 位）；其他格式用 `WithPhoneValidator`。`UpdateProfile` 使用 UPDATE 再 SELECT，不依赖 SQLite `RETURNING`（保持 3.22 可用）。
 
-## Access / Refresh Token（0.11.0）
+## Access / Refresh Token
 
-**不兼容：** access token 默认有效期从 30 天改为 **2 小时**（`DefaultAccessTokenTTL`）。仍依赖长效 access token、且不打算接入 refresh 的宿主，构造时传入 `WithTokenExpiry(30 * 24 * time.Hour)`。升级前已经发出、只有 `sub` 和 `exp` 的 token 在原来的 `exp` 之前仍然有效，但没有 `jti`，无法撤销。
+登录、短信登录、融合认证登录成功时同时签发一对 HS256 token（算法只接受 HS256）。access token 必须带 `typ=access` 和 `jti`，否则 `RequireAuth` 拒绝。`WithTokenExpiry` 设置 access token 有效期，默认 **2 小时**（`DefaultAccessTokenTTL`）。
 
-登录、短信登录、融合认证登录成功时同时签发一对 HS256 token（算法仍然只接受 HS256）：
+登录、短信登录、融合认证登录成功时的响应：
 
 ```json
 {"token":"<access>","refresh_token":"<refresh>","expires_in":7200,"user":{"id":1,"phone":"..."}}
 ```
 
-短信 / 融合认证响应仍带 `"created"`。`POST /api/auth/register` **不**签发 JWT。
+短信 / 融合认证响应带 `"created"`。`POST /api/auth/register` **不**签发 JWT。
 
 | | access | refresh |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ db, err := sql.Open(
 
 `POST /api/auth/logout` 撤销 `Authorization: Bearer` access token 的 `jti`（过期也认签名，便于退出），body 可带 `{"refresh_token":"..."}` 一并撤销。签名不对的字符串会被忽略。成功响应 `{"ok":true}`。黑名单存储失败时返回 500，调用方应重试；auth_client 仍会清掉本地会话。
 
-撤销列表是 `TokenBlacklist`。默认 `MemoryTokenBlacklist` 把 `jti` 留到该 token 自己的 `exp`，进程内有效，**不使用 SQLite**。多实例必须 `WithTokenBlacklist` 换成共享存储（Redis、数据库等）；若自备 SQLite 实现，请保持 3.22 兼容（不要用 `UPSERT` / `RETURNING`）。`IssueToken` 仍只返回 access token；`IssueTokens` 返回一对。
+撤销列表是 `TokenBlacklist`。默认 `MemoryTokenBlacklist` 把 `jti` 留到该 token 自己的 `exp`，进程内有效，**不使用 SQLite**。多实例必须 `WithTokenBlacklist` 换成共享存储（Redis、数据库等）；若自备 SQLite 实现，请保持 3.22 兼容（不要用 `UPSERT` / `RETURNING`）。`IssueToken` 只返回 access token；`IssueTokens` 返回一对。
 
 ## 错误码
 

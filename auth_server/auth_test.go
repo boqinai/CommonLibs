@@ -44,6 +44,9 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 		return res
 	}
 
+	if res := call("POST", "/api/auth/register", "", `{"phone":"12345678","password":"12345678"}`); res.Code != http.StatusBadRequest {
+		t.Fatalf("non-mainland phone: %d %s", res.Code, res.Body.String())
+	}
 	if res := call("POST", "/api/auth/register", "", `{"phone":"13800000000","password":"12345678"}`); res.Code != http.StatusCreated {
 		t.Fatalf("register: %d %s", res.Code, res.Body.String())
 	}
@@ -109,6 +112,16 @@ func TestRegisterLoginAndAuthenticatedRoutes(t *testing.T) {
 	if meData.Nickname != "棋圣" || meData.Avatar != "4" {
 		t.Fatalf("updated meData mismatch: %+v", meData)
 	}
+	partial := call("PUT", "/api/auth/profile", session.Token, `{"avatar":"9"}`)
+	if partial.Code != http.StatusOK {
+		t.Fatalf("partial profile: %d %s", partial.Code, partial.Body.String())
+	}
+	if err := json.Unmarshal(call("GET", "/api/auth/me", session.Token, "").Body.Bytes(), &meData); err != nil {
+		t.Fatal(err)
+	}
+	if meData.Nickname != "棋圣" || meData.Avatar != "9" {
+		t.Fatalf("partial update overwrote another field: %+v", meData)
+	}
 
 	// Reject oversized profile
 	badProfileRes := call("PUT", "/api/auth/profile", session.Token, `{"nickname":"`+strings.Repeat("a", 70)+`"}`)
@@ -156,61 +169,5 @@ func TestInitConfiguresSQLiteForConcurrentWrites(t *testing.T) {
 	}
 	if journalMode != "wal" || busyTimeout != 5000 {
 		t.Fatalf("journal_mode=%q busy_timeout=%d", journalMode, busyTimeout)
-	}
-}
-
-func TestEnsureColumnsMigratesExistingLegacyTable(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	// Create legacy users table without nickname and avatar columns
-	_, err = db.Exec(`CREATE TABLE users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		phone TEXT UNIQUE NOT NULL,
-		password_hash TEXT NOT NULL,
-		created_at INTEGER NOT NULL
-	);
-	INSERT INTO users(phone, password_hash, created_at) VALUES('13900000000', 'hash', 1000);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	auth := New(db, []byte("test-secret"))
-	if err := auth.Init(context.Background()); err != nil {
-		t.Fatalf("Init with legacy table failed: %v", err)
-	}
-
-	user, err := auth.store.GetUserByID(context.Background(), 1)
-	if err != nil {
-		t.Fatalf("GetUserByID after migration failed: %v", err)
-	}
-	if user.Phone != "13900000000" || user.Nickname != "" || user.Avatar != "0" {
-		t.Fatalf("unexpected user after migration: %+v", user)
-	}
-
-	profileStore, ok := auth.store.(UserProfileStore)
-	if !ok {
-		t.Fatal("SQLite store does not implement UserProfileStore")
-	}
-	nickname := "老棋手"
-	avatar := "3"
-	if _, err := profileStore.UpdateProfile(context.Background(), 1, &nickname, &avatar); err != nil {
-		t.Fatalf("UpdateProfile after migration failed: %v", err)
-	}
-	updated, err := auth.store.GetUserByID(context.Background(), 1)
-	if err != nil || updated.Nickname != "老棋手" || updated.Avatar != "3" {
-		t.Fatalf("expected updated profile, got: %+v, err: %v", updated, err)
-	}
-
-	nextAvatar := "4"
-	partial, err := profileStore.UpdateProfile(context.Background(), 1, nil, &nextAvatar)
-	if err != nil {
-		t.Fatalf("partial profile update failed: %v", err)
-	}
-	if partial.Nickname != "老棋手" || partial.Avatar != "4" {
-		t.Fatalf("partial update overwrote another field: %+v", partial)
 	}
 }

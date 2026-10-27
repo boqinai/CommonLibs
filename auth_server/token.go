@@ -19,7 +19,7 @@ import (
 
 const (
 	// DefaultAccessTokenTTL is the access-token lifetime when WithTokenExpiry
-	// is not set. This replaced the previous 30-day default.
+	// is not set.
 	DefaultAccessTokenTTL = 2 * time.Hour
 	// DefaultRefreshTokenTTL is the refresh-token lifetime when
 	// WithRefreshTokenExpiry is not set.
@@ -309,9 +309,9 @@ func (s *Server) authenticate(ctx context.Context, header string) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	// Tokens issued before typ existed (sub+exp only) still count as access
-	// tokens. Refresh tokens must not authorize API calls.
-	if claims.Typ == TokenTypeRefresh || (claims.Typ != "" && claims.Typ != TokenTypeAccess) {
+	// Access tokens always carry typ=access and a jti. Refresh tokens, and
+	// any token missing those claims, do not authorize API calls.
+	if claims.Typ != TokenTypeAccess || claims.ID == "" {
 		return 0, ErrInvalidToken
 	}
 	if err := s.rejectRevoked(ctx, claims); err != nil {

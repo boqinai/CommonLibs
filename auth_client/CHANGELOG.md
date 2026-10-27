@@ -1,3 +1,11 @@
+## 0.16.0
+
+- `logout` always POSTs `/logout` when an access or refresh token is present. Local session cleanup still happens if that call fails. The `revokeOnLogout` flag is gone.
+- Remove `MigratingTokenStorage`. `TokenStorage` now includes refresh-token read, write, and clear.
+- Login requires `token`, `refresh_token`, and `user` (`nickname` and `avatar` are required strings). Refresh requires a new `refresh_token`. `created` stays optional because password login does not send it.
+- Error bodies must be JSON with a `message`. Other bodies are `invalid_response`.
+- `sendSmsCode` requires a positive `cooldown` integer.
+
 ## 0.15.0
 
 - Persist `refresh_token` via `RefreshTokenStorage` (built-in stores) and, on 401, exchange it at `POST /api/auth/refresh` with the same single-flight and generation checks as `onRefreshToken`. A custom `onRefreshToken` still takes priority.

@@ -42,25 +42,23 @@ void main() {
     expect(result.update?.forceUpdate, isTrue);
   });
 
-  test('parses optional APK integrity metadata', () {
+  test('parses sha256 and file size and ignores md5', () {
     final digest = List.filled(64, 'a').join();
-    final md5Digest = List.filled(32, 'b').join();
     final result = AppUpdateService.parseResponse({
       'update_available': true,
       'version_name': '1.1.0',
       'download_url': 'https://example.com/app.apk',
       'sha256': digest,
-      'md5': md5Digest,
+      'md5': 'not-a-digest',
       'file_size': 1024,
     });
 
     expect(result.status, UpdateCheckStatus.updateAvailable);
     expect(result.update?.sha256, digest);
-    expect(result.update?.md5, md5Digest);
     expect(result.update?.fileSize, 1024);
   });
 
-  test('rejects malformed APK integrity metadata', () {
+  test('rejects malformed sha256 metadata', () {
     expect(
       AppUpdateService.parseResponse({
         'update_available': true,
@@ -70,15 +68,19 @@ void main() {
       }).status,
       UpdateCheckStatus.failed,
     );
-    expect(
-      AppUpdateService.parseResponse({
-        'update_available': true,
-        'version_name': '1.1.0',
-        'download_url': 'https://example.com/app.apk',
-        'md5': 'short-md5',
-      }).status,
-      UpdateCheckStatus.failed,
-    );
+  });
+
+  test('md5 alone is not an integrity check', () {
+    final result = AppUpdateService.parseResponse({
+      'update_available': true,
+      'version_name': '1.1.0',
+      'download_url': 'https://example.com/app.apk',
+      'md5': List.filled(32, 'b').join(),
+    });
+
+    expect(result.status, UpdateCheckStatus.updateAvailable);
+    expect(result.update?.sha256, isNull);
+    expect(result.update?.fileSize, isNull);
   });
 
   test('uses the native downloader and opens the downloaded APK', () async {

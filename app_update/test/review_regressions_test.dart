@@ -89,7 +89,6 @@ class _QueuedUpdateService extends AppUpdateService {
     Duration inactivityTimeout = const Duration(seconds: 30),
     bool wifiOnly = false,
     String? expectedSha256,
-    String? expectedMd5,
     int? expectedSize,
     void Function(double progress)? onProgress,
     void Function(int downloadId)? onStarted,
