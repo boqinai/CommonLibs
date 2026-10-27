@@ -78,7 +78,7 @@ func TestPhoneRoutes(t *testing.T) {
 		t.Fatal(c)
 	}
 	c, out = call("/api/auth/sms/login", `{"phone":"13800138000","code":"`+sender.last+`"}`)
-	if c != 200 || out["token"] == "" || out["created"] != true {
+	if c != 200 || out["token"] == "" || out["refresh_token"] == "" || out["expires_in"] != float64(7200) || out["created"] != true {
 		t.Fatal(c, out)
 	}
 	if c, _ := call("/api/auth/sms/login", `{"phone":"13800138000","code":"`+sender.last+`"}`); c != 401 {
@@ -98,7 +98,7 @@ func TestPhoneRoutes(t *testing.T) {
 	if c, out := call("/api/auth/fusion/token", `{"platform":"ios"}`); c != 429 || out["code"] != "too_many_requests" {
 		t.Fatal(c, out)
 	}
-	if c, out := call("/api/auth/fusion/login", `{"token":"good"}`); c != 200 || out["created"] != true {
+	if c, out := call("/api/auth/fusion/login", `{"token":"good"}`); c != 200 || out["created"] != true || out["refresh_token"] == "" || out["token"] == "" {
 		t.Fatal(c, out)
 	}
 	if c, out := call("/api/auth/fusion/login", `{"token":"good"}`); c != 200 || out["created"] != false {

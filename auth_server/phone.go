@@ -292,11 +292,11 @@ func (s *Server) RegisterPhoneRoutes(mux *http.ServeMux, cfg PhoneRoutes) {
 func limited(l *RateLimiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+			writeError(w, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
 			return
 		}
 		if !l.Allow(ClientIP(r), time.Now()) {
-			writeError(w, http.StatusTooManyRequests, "too_many_requests", "too many requests")
+			writeError(w, http.StatusTooManyRequests, CodeTooManyRequests, "too many requests")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -308,7 +308,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if d.Decode(v) != nil || d.Decode(&struct{}{}) != io.EOF {
-		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request")
+		writeError(w, http.StatusBadRequest, CodeInvalidRequest, "invalid request")
 		return false
 	}
 	return true
@@ -337,14 +337,14 @@ func (s *Server) SendSMSCode(codes *SMSCodes) http.Handler {
 		case err == nil:
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cooldown": codes.CooldownSeconds()})
 		case errors.Is(err, ErrInvalidPhone):
-			writeError(w, http.StatusBadRequest, "invalid_phone", "invalid phone number")
+			writeError(w, http.StatusBadRequest, CodeInvalidPhone, "invalid phone number")
 		case errors.Is(err, ErrTooFrequent):
-			writeError(w, http.StatusTooManyRequests, "sms_too_frequent", "please wait before requesting another code")
+			writeError(w, http.StatusTooManyRequests, CodeSMSTooFrequent, "please wait before requesting another code")
 		case errors.Is(err, ErrDailyLimit):
-			writeError(w, http.StatusTooManyRequests, "sms_daily_limit", "daily code limit reached")
+			writeError(w, http.StatusTooManyRequests, CodeSMSDailyLimit, "daily code limit reached")
 		default:
 			log.Printf("authserver: sms send to %s failed: %v", MaskPhone(phone), err)
-			writeError(w, http.StatusBadGateway, "sms_unavailable", "sms service unavailable")
+			writeError(w, http.StatusBadGateway, CodeSMSUnavailable, "sms service unavailable")
 		}
 	})
 }
@@ -361,23 +361,18 @@ func (s *Server) PhoneLogin(v PhoneVerifier) http.Handler {
 		if err != nil {
 			if !errors.Is(err, ErrVerificationFailed) {
 				log.Printf("authserver: phone verification error: %v", err)
-				writeError(w, http.StatusBadGateway, "verification_unavailable", "verification service unavailable")
+				writeError(w, http.StatusBadGateway, CodeVerificationUnavailable, "verification service unavailable")
 				return
 			}
-			writeError(w, http.StatusUnauthorized, "verification_failed", "verification failed")
+			writeError(w, http.StatusUnauthorized, CodeVerificationFailed, "verification failed")
 			return
 		}
 		user, created, err := s.UserForPhone(r.Context(), phone)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "login failed")
+			writeError(w, http.StatusInternalServerError, CodeInternalError, "login failed")
 			return
 		}
-		token, err := s.IssueToken(user.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal_error", "token creation failed")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": userJSON(user), "created": created})
+		s.writeAuthSession(w, user, &created)
 	})
 }
 
@@ -421,13 +416,13 @@ func fusionToken(issue func(context.Context, string) (any, error)) http.Handler 
 			return
 		}
 		if in.Platform != "android" && in.Platform != "ios" {
-			writeError(w, http.StatusBadRequest, "unsupported_platform", "unsupported platform")
+			writeError(w, http.StatusBadRequest, CodeUnsupportedPlatform, "unsupported platform")
 			return
 		}
 		out, err := issue(r.Context(), in.Platform)
 		if err != nil {
 			log.Printf("authserver: fusion token (%s) failed: %v", in.Platform, err)
-			writeError(w, http.StatusBadGateway, "verification_unavailable", "verification service unavailable")
+			writeError(w, http.StatusBadGateway, CodeVerificationUnavailable, "verification service unavailable")
 			return
 		}
 		writeJSON(w, http.StatusOK, out)

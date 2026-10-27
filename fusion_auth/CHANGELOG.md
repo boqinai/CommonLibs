@@ -1,3 +1,10 @@
+## 0.3.0
+
+- Move the Android `fusionauth-1.2.16.aar` and the iOS `AlicomFusionAuth` Mach-O binaries (device and simulator) to Git LFS. Contributors and CI need `git lfs install` and `git lfs pull`; `actions/checkout` uses `lfs: true`. Headers and resource bundles stay in regular Git.
+- Document the plugin release (`0.3.0` / tag `fusion_auth-v0.3.0`) separately from the vendored SDK labels: Android Maven coordinate and AAR filename **1.2.16**, AAR manifest `android:versionName` **1.2.8**, iOS drop labeled **1.2.15** while `CFBundleShortVersionString` inside the framework is **1.2.14**.
+- Minimums unchanged: iOS 15.0, Android `minSdk` 24 (the AAR manifest's minSdk 21 is not adopted).
+- Align the podspec version with the Flutter package version.
+
 ## 0.2.0
 
 - Ask Dart for a refreshed 鉴权Token via `onTokenUpdate` when the SDK calls `onSDKTokenUpdate`; falls back to the `start` token (document ~3600s limit) if unanswered.

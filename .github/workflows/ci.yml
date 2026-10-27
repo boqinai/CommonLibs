@@ -16,10 +16,32 @@ jobs:
         working-directory: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+      - name: Verify fusion_auth Git LFS binaries and minimums
+        if: matrix.package == 'fusion_auth'
+        run: |
+          set -eu
+          aar="android/repo/com/alicom/fusion/fusionauth/1.2.16/fusionauth-1.2.16.aar"
+          device="ios/Frameworks/AlicomFusionAuth.xcframework/ios-arm64/AlicomFusionAuth.framework/AlicomFusionAuth"
+          sim="ios/Frameworks/AlicomFusionAuth.xcframework/ios-arm64_x86_64-simulator/AlicomFusionAuth.framework/AlicomFusionAuth"
+          for f in "$aar" "$device" "$sim"; do
+            if [ ! -s "$f" ]; then
+              echo "missing SDK binary: $f" >&2
+              exit 1
+            fi
+            if head -c 200 "$f" | grep -q "git-lfs.github.com"; then
+              echo "Git LFS pointer was not checked out: $f" >&2
+              exit 1
+            fi
+          done
+          grep -q 'minSdk = 24' android/build.gradle.kts
+          grep -q ":ios, '15.0'" ios/fusion_auth.podspec
+          unzip -p "$aar" AndroidManifest.xml | grep -q 'android:versionName="1.2.8"'
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --fatal-infos
@@ -32,6 +54,8 @@ jobs:
         working-directory: app_update/example
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -45,6 +69,8 @@ jobs:
         working-directory: auth_server
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: actions/setup-go@v6
         with:
           go-version-file: auth_server/go.mod
@@ -60,6 +86,8 @@ jobs:
         working-directory: release_tool
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"

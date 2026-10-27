@@ -111,6 +111,9 @@ class UserProfile {
 typedef AuthHeaderProvider = FutureOr<Map<String, String>> Function();
 typedef AuthTokenRefresher = Future<String?> Function();
 
+/// Machine-readable error codes. Values shared with auth_server `codes.go`
+/// must stay byte-for-byte identical. [invalidResponse] and [networkFailure]
+/// are produced only by this client.
 abstract final class AuthErrorCode {
   static const invalidRequest = 'invalid_request';
   static const invalidCredentialsFormat = 'invalid_credentials_format';
@@ -120,6 +123,7 @@ abstract final class AuthErrorCode {
   static const userNotFound = 'user_not_found';
   static const methodNotAllowed = 'method_not_allowed';
   static const internalError = 'internal_error';
+  static const profileNotSupported = 'profile_not_supported';
   static const invalidResponse = 'invalid_response';
   static const networkFailure = 'network_failure';
   static const invalidPhone = 'invalid_phone';
@@ -130,6 +134,7 @@ abstract final class AuthErrorCode {
   static const smsUnavailable = 'sms_unavailable';
   static const verificationUnavailable = 'verification_unavailable';
   static const unsupportedPlatform = 'unsupported_platform';
+  static const invalidRefreshToken = 'invalid_refresh_token';
 }
 
 abstract interface class TokenStorage {
@@ -138,12 +143,23 @@ abstract interface class TokenStorage {
   Future<void> clear();
 }
 
-class SecureTokenStore implements TokenStorage {
+/// Optional persistence for the refresh token. Built-in stores implement it.
+/// A custom [TokenStorage] that does not will keep the refresh token in
+/// memory for the life of [AuthClient] only.
+abstract interface class RefreshTokenStorage {
+  Future<String?> readRefresh();
+  Future<void> writeRefresh(String token);
+  Future<void> clearRefresh();
+}
+
+class SecureTokenStore implements TokenStorage, RefreshTokenStorage {
   SecureTokenStore({this.name = 'auth_session', FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
 
   final String name;
   final FlutterSecureStorage _storage;
+
+  String get _refreshKey => '$name.refresh';
 
   @override
   Future<String?> read() => _storage.read(key: name);
@@ -153,9 +169,19 @@ class SecureTokenStore implements TokenStorage {
 
   @override
   Future<void> clear() => _storage.delete(key: name);
+
+  @override
+  Future<String?> readRefresh() => _storage.read(key: _refreshKey);
+
+  @override
+  Future<void> writeRefresh(String token) =>
+      _storage.write(key: _refreshKey, value: token);
+
+  @override
+  Future<void> clearRefresh() => _storage.delete(key: _refreshKey);
 }
 
-class MigratingTokenStorage implements TokenStorage {
+class MigratingTokenStorage implements TokenStorage, RefreshTokenStorage {
   MigratingTokenStorage({required this.primary, required this.legacy});
 
   final TokenStorage primary;
@@ -183,11 +209,45 @@ class MigratingTokenStorage implements TokenStorage {
     await primary.clear();
     await legacy.clear();
   }
+
+  @override
+  Future<String?> readRefresh() async {
+    final currentStore = _refreshStore(primary);
+    if (currentStore == null) return null;
+    final current = await currentStore.readRefresh();
+    if (current != null && current.isNotEmpty) return current;
+    final oldStore = _refreshStore(legacy);
+    if (oldStore == null) return null;
+    final token = await oldStore.readRefresh();
+    if (token == null || token.isEmpty) return null;
+    await currentStore.writeRefresh(token);
+    await oldStore.clearRefresh();
+    return token;
+  }
+
+  @override
+  Future<void> writeRefresh(String token) async {
+    final currentStore = _refreshStore(primary);
+    if (currentStore != null) await currentStore.writeRefresh(token);
+    final oldStore = _refreshStore(legacy);
+    if (oldStore != null) await oldStore.clearRefresh();
+  }
+
+  @override
+  Future<void> clearRefresh() async {
+    final currentStore = _refreshStore(primary);
+    final oldStore = _refreshStore(legacy);
+    if (currentStore != null) await currentStore.clearRefresh();
+    if (oldStore != null) await oldStore.clearRefresh();
+  }
 }
+
+RefreshTokenStorage? _refreshStore(TokenStorage storage) =>
+    storage is RefreshTokenStorage ? storage as RefreshTokenStorage : null;
 
 /// Plaintext file token store. Prefer [SecureTokenStore] in production; keep
 /// this for tests or one-shot migration via [MigratingTokenStorage].
-class TokenStore implements TokenStorage {
+class TokenStore implements TokenStorage, RefreshTokenStorage {
   TokenStore({this.name = 'auth_session', Future<File> Function()? fileFactory})
     : _fileFactory = fileFactory;
 
@@ -215,6 +275,32 @@ class TokenStore implements TokenStorage {
     if (await file.exists()) await file.delete();
   }
 
+  @override
+  Future<String?> readRefresh() async {
+    final file = await _refreshFile();
+    if (!await file.exists()) return null;
+    final token = (await file.readAsString()).trim();
+    return token.isEmpty ? null : token;
+  }
+
+  @override
+  Future<void> writeRefresh(String token) async {
+    final file = await _refreshFile();
+    await file.parent.create(recursive: true);
+    await file.writeAsString(token, flush: true);
+  }
+
+  @override
+  Future<void> clearRefresh() async {
+    final file = await _refreshFile();
+    if (await file.exists()) await file.delete();
+  }
+
+  Future<File> _refreshFile() async {
+    final file = await _file();
+    return File('${file.path}.refresh');
+  }
+
   Future<File> _file() async {
     if (_fileFactory != null) return _fileFactory();
     final safeName = name.replaceAll(_unsafeFileNameCharacters, '_');
@@ -230,6 +316,7 @@ class AuthClient {
     TokenStorage? tokenStore,
     this.headerProvider,
     this.onRefreshToken,
+    this.revokeOnLogout = true,
   }) : baseUrl = _normalizeBaseUrl(baseUrl),
        authPath = _normalizeAuthPath(authPath),
        _client = client ?? http.Client(),
@@ -241,15 +328,25 @@ class AuthClient {
   final TokenStorage _tokenStore;
   final AuthHeaderProvider? headerProvider;
   final AuthTokenRefresher? onRefreshToken;
+
+  /// When true (the default), [logout] POSTs `/logout` so the server can
+  /// revoke the access token and refresh token. Failures are ignored and
+  /// the local session is still cleared. Set false for a client-only logout
+  /// (auth_server older than 0.11.0, or tests).
+  final bool revokeOnLogout;
   final StreamController<bool> _authStateController =
       StreamController<bool>.broadcast();
-  Future<String?>? _activeRefresh;
+  Future<_Refreshed?>? _activeRefresh;
   int _authGeneration = 0;
   String? _token;
+  String? _refreshToken;
   UserProfile? _profile;
   bool? _lastLoginCreated;
 
   String? get token => _token;
+
+  /// Refresh token from the latest login or refresh, when the server sent one.
+  String? get refreshToken => _refreshToken;
   UserProfile? get profile => _profile;
 
   /// Whether the last verified-phone login created a new user.
@@ -356,9 +453,30 @@ class AuthClient {
       }
       created = raw;
     }
-    await _tokenStore.write(token);
+    String? refresh;
+    if (data is Map<String, dynamic> && data.containsKey('refresh_token')) {
+      final rawRefresh = data['refresh_token'];
+      if (rawRefresh is! String || rawRefresh.isEmpty) {
+        throw const AuthException(
+          '登录响应中的 refresh_token 格式错误',
+          code: AuthErrorCode.invalidResponse,
+        );
+      }
+      refresh = rawRefresh;
+    }
+    final storage = _tokenStore;
+    await storage.write(token);
+    final refreshStore = _refreshStore(storage);
+    if (refreshStore != null) {
+      if (refresh != null) {
+        await refreshStore.writeRefresh(refresh);
+      } else {
+        await refreshStore.clearRefresh();
+      }
+    }
     _authGeneration++;
     _token = token;
+    _refreshToken = refresh;
     _profile = profile;
     _lastLoginCreated = created;
     _authStateController.add(true);
@@ -367,7 +485,14 @@ class AuthClient {
 
   Future<String?> restore({bool validate = false}) async {
     _authGeneration++;
-    _token = await _tokenStore.read();
+    final storage = _tokenStore;
+    _token = await storage.read();
+    _refreshToken = null;
+    final refreshStore = _refreshStore(storage);
+    if (_token != null && refreshStore != null) {
+      final refresh = await refreshStore.readRefresh();
+      _refreshToken = (refresh != null && refresh.isNotEmpty) ? refresh : null;
+    }
     _profile = null;
     _lastLoginCreated = null;
     _authStateController.add(isLoggedIn);
@@ -446,12 +571,108 @@ class AuthClient {
   }
 
   Future<void> logout() async {
+    final access = _token;
+    final refresh = _refreshToken;
     _authGeneration++;
     _token = null;
+    _refreshToken = null;
     _profile = null;
     _lastLoginCreated = null;
-    await _tokenStore.clear();
+    final storage = _tokenStore;
+    await storage.clear();
+    await _refreshStore(storage)?.clearRefresh();
     _authStateController.add(false);
+    final hasToken =
+        (access != null && access.isNotEmpty) ||
+        (refresh != null && refresh.isNotEmpty);
+    if (revokeOnLogout && hasToken) {
+      await _revokeRemote(access, refresh);
+    }
+  }
+
+  bool get _canRefresh =>
+      onRefreshToken != null || (_refreshToken?.isNotEmpty ?? false);
+
+  Future<_Refreshed?> _performRefresh() async {
+    if (onRefreshToken != null) {
+      final access = await onRefreshToken!();
+      if (access == null || access.isEmpty) return null;
+      return _Refreshed(access, _refreshToken);
+    }
+    final refreshToken = _refreshToken;
+    if (refreshToken == null || refreshToken.isEmpty) return null;
+    final dynamic data;
+    try {
+      data = await _request(
+        'POST',
+        '$authPath/refresh',
+        body: {'refresh_token': refreshToken},
+        allowRefresh: false,
+      );
+    } on AuthException catch (error) {
+      if (error.statusCode == 401 ||
+          error.code == AuthErrorCode.invalidRefreshToken) {
+        return null;
+      }
+      rethrow;
+    }
+    if (data is! Map<String, dynamic>) {
+      throw const AuthException(
+        '刷新响应格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
+    final access = data['token'];
+    if (access is! String || access.isEmpty) {
+      throw const AuthException(
+        '刷新响应缺少 token',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
+    final rawNext = data['refresh_token'];
+    if (rawNext == null) return _Refreshed(access, refreshToken);
+    if (rawNext is! String || rawNext.isEmpty) {
+      throw const AuthException(
+        '刷新响应中的 refresh_token 格式错误',
+        code: AuthErrorCode.invalidResponse,
+      );
+    }
+    return _Refreshed(access, rawNext);
+  }
+
+  Future<void> _persistRefreshed(_Refreshed refreshed) async {
+    final storage = _tokenStore;
+    await storage.write(refreshed.access);
+    final next = refreshed.refresh;
+    final refreshStore = _refreshStore(storage);
+    if (next != null && next.isNotEmpty && refreshStore != null) {
+      await refreshStore.writeRefresh(next);
+      _refreshToken = next;
+    }
+    _token = refreshed.access;
+  }
+
+  Future<void> _revokeRemote(String? access, String? refresh) async {
+    try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json; charset=utf-8',
+        if (headerProvider != null) ...await headerProvider!(),
+        if (access != null && access.isNotEmpty)
+          'Authorization': 'Bearer $access',
+      };
+      await _client
+          .post(
+            Uri.parse('$baseUrl$authPath/logout'),
+            headers: headers,
+            body: jsonEncode({
+              if (refresh != null && refresh.isNotEmpty)
+                'refresh_token': refresh,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+    } catch (_) {
+      // Local session is already cleared. Revocation is best-effort.
+    }
   }
 
   void close() {
@@ -514,14 +735,21 @@ class AuthClient {
         if (authenticated &&
             response.statusCode == 401 &&
             allowRefresh &&
-            onRefreshToken != null) {
+            _canRefresh) {
           final generation = _authGeneration;
-          final refresh = _activeRefresh ??= Future<String?>.sync(
-            onRefreshToken!,
-          );
-          String? refreshed;
+          final refresh = _activeRefresh ??= _performRefresh();
+          _Refreshed? refreshed;
           try {
             refreshed = await refresh;
+          } on AuthException {
+            if (generation != _authGeneration) {
+              throw const AuthException(
+                '认证状态已发生变化',
+                code: AuthErrorCode.unauthorized,
+                statusCode: 401,
+              );
+            }
+            rethrow;
           } finally {
             if (identical(_activeRefresh, refresh)) _activeRefresh = null;
           }
@@ -532,9 +760,8 @@ class AuthClient {
               statusCode: 401,
             );
           }
-          if (refreshed != null && refreshed.isNotEmpty) {
-            _token = refreshed;
-            await _tokenStore.write(refreshed);
+          if (refreshed != null && refreshed.access.isNotEmpty) {
+            await _persistRefreshed(refreshed);
             _authStateController.add(true);
             return await _request(
               method,
@@ -631,4 +858,11 @@ class AuthClient {
     }
     return (message: text, code: null);
   }
+}
+
+class _Refreshed {
+  const _Refreshed(this.access, this.refresh);
+
+  final String access;
+  final String? refresh;
 }
