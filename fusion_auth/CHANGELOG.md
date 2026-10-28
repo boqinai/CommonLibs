@@ -1,3 +1,7 @@
+## 0.3.3
+
+- Android `FusionSceneController.launch` claims launch ownership with an atomic that is independent of the pending callback and the start gate. A concurrent launch returns `busy` and does not reset the gate, tear down the SDK, or start a second session.
+
 ## 0.3.2
 
 - iOS SDK callbacks carry a generation counter, matching Android. A callback from a previous request, including one that resumes after `dispatch_async`, cannot update the token, continue the scene, or resolve `start`. SDK init that throws still completes the pending `start` once, as `start_failed`.

@@ -1,3 +1,8 @@
+## 0.15.0
+
+- Trusted-proxy `X-Forwarded-For` hops that are not valid IP addresses are not rate-limit keys. The right-to-left walk stops at the first illegal hop and uses the TCP peer (`RemoteAddr`). Rotating illegal strings cannot mint fresh buckets, and hops to the left of that illegal hop are ignored. Valid hops are canonical (`netip.Addr` with IPv4-mapped addresses unmapped and zones removed), so equivalent spellings share one bucket. `ClientIP` still returns `RemoteAddr` and ignores `X-Forwarded-For`. `ParseTrustedProxies` is unchanged.
+- `SMSCodes.Send` rolls back the phone cooldown/daily reservation and the IP daily reservation when the CSPRNG fails before a code is sent. `SMSCodes.Entropy` overrides that reader (`nil` uses `crypto/rand`). A failed draw does not cool the number down or consume either daily quota.
+
 ## 0.14.0
 
 - **Breaking:** `WithTrustedProxies` takes `...netip.Prefix`, not raw strings, and does not panic. Parse `PENNY_TRUSTED_PROXIES` with `ParseTrustedProxies(string) ([]netip.Prefix, error)` (commas, semicolons, or whitespace). An empty string means no trusted proxies. When every `X-Forwarded-For` hop is trusted, the rate-limit key is the TCP peer (`RemoteAddr`), not the leftmost hop.

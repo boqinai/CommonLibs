@@ -300,6 +300,56 @@ func TestTrustedProxyUsesForwardedClient(t *testing.T) {
 	}
 }
 
+func TestSpoofedNonIPXForwardedForDoesNotMintBucket(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	prefixes, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := New(db, []byte("secret"), WithBcryptCost(4),
+		WithTrustedProxies(prefixes...),
+		WithCredentialRateLimiters(NewRateLimiter(1, time.Hour), NewRateLimiter(1, time.Hour)))
+	if err := auth.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+	post := func(phone, xff string) int {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"phone":"`+phone+`","password":"12345678"}`))
+		req.RemoteAddr = "10.0.0.8:443"
+		req.Header.Set("X-Forwarded-For", xff)
+		mux.ServeHTTP(res, req)
+		return res.Code
+	}
+	if c := post("13800138301", "not-an-ip"); c != http.StatusCreated {
+		t.Fatalf("first illegal hop: %d", c)
+	}
+	illegal := []string{"%%%", "1.2.3.4.5", "203.0.113.9:443", "unknown", "[198.51.100.9]", "198.51.100.22, not-an-ip"}
+	for i, xff := range illegal {
+		phone := fmt.Sprintf("138001384%02d", i)
+		if c := post(phone, xff); c != http.StatusTooManyRequests {
+			t.Fatalf("XFF %q minted a fresh bucket: %d", xff, c)
+		}
+	}
+	if c := post("13800138320", "198.51.100.20"); c != http.StatusCreated {
+		t.Fatalf("valid client: %d", c)
+	}
+	if c := post("13800138321", "::ffff:198.51.100.20"); c != http.StatusTooManyRequests {
+		t.Fatalf("IPv4-mapped spelling minted a bucket: %d", c)
+	}
+	if c := post("13800138322", "not-an-ip, 198.51.100.20"); c != http.StatusTooManyRequests {
+		t.Fatalf("garbage left of the client minted a bucket: %d", c)
+	}
+	if c := post("13800138323", "198.51.100.22"); c != http.StatusCreated {
+		t.Fatalf("IP left of an illegal hop was consumed: %d", c)
+	}
+}
+
 func TestClientIPResolverOverridesPeer(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -478,6 +528,46 @@ func TestSMSIPDailyLimit(t *testing.T) {
 	}
 }
 
+type failingEntropy struct{}
+
+func (failingEntropy) Read([]byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
+}
+
+func TestSMSRandomFailureRollsBackReservations(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sender := &captureSender{}
+	s := &SMSCodes{
+		Sender:       sender,
+		HMACKey:      []byte("secret"),
+		Cooldown:     time.Minute,
+		DailyLimit:   1,
+		IPDailyLimit: 1,
+		Entropy:      failingEntropy{},
+		Now:          func() time.Time { return now },
+	}
+	ctx := WithSMSClientIP(context.Background(), "203.0.113.9")
+	const phone = "13800138000"
+	if err := s.Send(ctx, phone); err == nil || sender.last != "" {
+		t.Fatalf("entropy failure err=%v sent=%q", err, sender.last)
+	}
+	s.mu.Lock()
+	_, phoneHeld := s.sends[phone]
+	_, ipHeld := s.ipSends["203.0.113.9"]
+	_, codeHeld := s.codes[phone]
+	s.mu.Unlock()
+	if phoneHeld || ipHeld || codeHeld {
+		t.Fatalf("reservations stuck phone=%v ip=%v code=%v", phoneHeld, ipHeld, codeHeld)
+	}
+	s.Entropy = nil
+	if err := s.Send(ctx, phone); err != nil {
+		t.Fatalf("entropy failure consumed cooldown or daily quota: %v", err)
+	}
+	if len(sender.last) != 6 {
+		t.Fatalf("code %q", sender.last)
+	}
+}
+
 func TestParseTrustedProxiesAndAllTrustedHops(t *testing.T) {
 	for _, raw := range []string{"nope", "10.0.0.0/99", "10.0.0.0/8, bogus", "999.1.1.1"} {
 		if _, err := ParseTrustedProxies(raw); err == nil {
@@ -505,5 +595,44 @@ func TestParseTrustedProxiesAndAllTrustedHops(t *testing.T) {
 	r.Header.Set("X-Forwarded-For", "203.0.113.4, 10.0.0.4")
 	if got := clientIP(r, trusted); got != "203.0.113.4" {
 		t.Fatalf("client hop: %s", got)
+	}
+}
+
+func TestClientIPRejectsUnparsableForwardedHops(t *testing.T) {
+	trusted, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "10.1.2.3:443"
+	cases := []struct{ xff, want string }{
+		{"not-an-ip", "10.1.2.3"},
+		{"%%%, 1.2.3", "10.1.2.3"},
+		{"203.0.113.5, not-an-ip", "10.1.2.3"},
+		{"not-an-ip, 203.0.113.5", "203.0.113.5"},
+		{"::ffff:203.0.113.8", "203.0.113.8"},
+		{"2001:0db8:0:0:0:0:0:2", "2001:db8::2"},
+		{"2001:db8::1%eth0", "2001:db8::1"},
+		{"2001:db8::1%eth1", "2001:db8::1"},
+		{"203.0.113.4, 10.0.0.4", "203.0.113.4"},
+		{"10.0.0.4, 10.0.0.5", "10.1.2.3"},
+		{"", "10.1.2.3"},
+		{"  ,  ", "10.1.2.3"},
+		{"[203.0.113.5]", "10.1.2.3"},
+		{"198.51.100.4:443", "10.1.2.3"},
+	}
+	for _, tc := range cases {
+		r.Header.Set("X-Forwarded-For", tc.xff)
+		if got := clientIP(r, trusted); got != tc.want {
+			t.Fatalf("XFF %q: got %s want %s", tc.xff, got, tc.want)
+		}
+	}
+	r.RemoteAddr = "203.0.113.9:1"
+	r.Header.Set("X-Forwarded-For", "not-an-ip")
+	if got := clientIP(r, trusted); got != "203.0.113.9" {
+		t.Fatalf("untrusted peer used XFF: %s", got)
+	}
+	if got := ClientIP(r); got != "203.0.113.9" {
+		t.Fatalf("ClientIP changed: %s", got)
 	}
 }
