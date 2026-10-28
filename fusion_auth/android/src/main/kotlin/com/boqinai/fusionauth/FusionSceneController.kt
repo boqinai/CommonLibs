@@ -16,36 +16,50 @@ class FusionSceneController(
     private val generation = AtomicLong()
     private val pending = AtomicReference<((FusionTerminal) -> Unit)?>(null)
 
+    /**
+     * Launch ownership, independent of [pending] and [gate]. Only the caller
+     * that wins this claim may reset the gate, tear down the SDK, or start
+     * the session. A concurrent launch returns "busy" without those calls.
+     */
+    private val launchOwner = AtomicReference<Any?>(null)
+
     fun hasPending(): Boolean = pending.get() != null
 
     fun isCurrent(session: Long): Boolean = session == generation.get()
 
     /**
-     * Starts one scene. Returns "busy" when a start is already pending.
-     * [destroySdk] runs before the new session and again if init throws.
-     * A null return means the SDK call returned or init failed terminally.
+     * Starts one scene. Returns "busy" when a start is already pending or
+     * another launch owns the attempt. [destroySdk] runs before the new
+     * session and again if init throws. A null return means the SDK call
+     * returned or init failed terminally.
      */
     fun launch(
         onResult: (FusionTerminal) -> Unit,
         destroySdk: () -> Unit,
         startSdk: (session: Long) -> Unit,
     ): String? {
-        if (pending.get() != null) return "busy"
-        destroySdk()
-        generation.incrementAndGet()
-        val session = generation.incrementAndGet()
-        gate.reset()
-        if (!gate.arm() || !pending.compareAndSet(null, onResult)) {
+        val claim = Any()
+        if (!launchOwner.compareAndSet(null, claim)) return "busy"
+        try {
+            if (pending.get() != null) return "busy"
+            destroySdk()
+            generation.incrementAndGet()
+            val session = generation.incrementAndGet()
             gate.reset()
-            pending.compareAndSet(onResult, null)
-            return "busy"
-        }
-        return try {
-            startSdk(session)
-            null
-        } catch (error: Throwable) {
-            release(destroySdk, "start_failed", error.message ?: error.javaClass.simpleName)
-            null
+            if (!gate.arm() || !pending.compareAndSet(null, onResult)) {
+                gate.reset()
+                pending.compareAndSet(onResult, null)
+                return "busy"
+            }
+            return try {
+                startSdk(session)
+                null
+            } catch (error: Throwable) {
+                release(destroySdk, "start_failed", error.message ?: error.javaClass.simpleName)
+                null
+            }
+        } finally {
+            launchOwner.compareAndSet(claim, null)
         }
     }
 

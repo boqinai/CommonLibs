@@ -90,6 +90,11 @@ type SMSCodes struct {
 	// A negative value disables the cap.
 	IPDailyLimit int
 	Now          func() time.Time
+	// Entropy draws verification-code digits. Nil uses crypto/rand.Reader.
+	// Send reserves the phone and IP quotas before the draw. If Entropy
+	// fails, both reservations are rolled back so the caller is not cooled
+	// down and the daily quotas are not consumed without an SMS.
+	Entropy io.Reader
 
 	mu      sync.Mutex
 	codes   map[string]*smsCode
@@ -293,6 +298,21 @@ func (s *SMSCodes) reserveIPLocked(ip string, now time.Time) error {
 	return nil
 }
 
+// rollbackReservationsLocked drops the phone and IP reservations recorded
+// at now. Callers must hold s.mu. A reservation that is no longer the latest
+// timestamp is left in place.
+func (s *SMSCodes) rollbackReservationsLocked(phone, ip string, now time.Time) {
+	if l := s.sends[phone]; len(l) > 0 && l[len(l)-1].Equal(now) {
+		l = l[:len(l)-1]
+		if len(l) == 0 {
+			delete(s.sends, phone)
+		} else {
+			s.sends[phone] = l
+		}
+	}
+	s.rollbackIPLocked(ip, now)
+}
+
 func (s *SMSCodes) rollbackIPLocked(ip string, now time.Time) {
 	if ip == "" || s.ipSends == nil {
 		return
@@ -358,20 +378,17 @@ func (s *SMSCodes) Send(ctx context.Context, phone string) error {
 	s.sends[phone] = append(recent, now) // reserve before the slow send
 	s.mu.Unlock()
 
-	code, err := RandomDigits(intOr(s.CodeLength, 6))
+	code, err := s.randomCode()
 	if err != nil {
+		s.mu.Lock()
+		s.rollbackReservationsLocked(phone, ip, now)
+		s.mu.Unlock()
 		return err
 	}
 	if err := s.Sender.SendCode(ctx, phone, code, s.ttl()); err != nil {
 		if !errors.Is(err, ErrTooFrequent) && !errors.Is(err, ErrDailyLimit) {
 			s.mu.Lock() // not delivered: release the reservation
-			if l := s.sends[phone]; len(l) > 0 && l[len(l)-1].Equal(now) {
-				s.sends[phone] = l[:len(l)-1]
-				if len(s.sends[phone]) == 0 {
-					delete(s.sends, phone)
-				}
-			}
-			s.rollbackIPLocked(ip, now)
+			s.rollbackReservationsLocked(phone, ip, now)
 			s.mu.Unlock()
 		}
 		return err
@@ -406,9 +423,24 @@ func (s *SMSCodes) VerifyPhone(_ context.Context, cred PhoneCredential) (string,
 
 // RandomDigits returns n cryptographically random decimal digits.
 func RandomDigits(n int) (string, error) {
+	return randomDigits(n, rand.Reader)
+}
+
+func (s *SMSCodes) randomCode() (string, error) {
+	src := s.Entropy
+	if src == nil {
+		src = rand.Reader
+	}
+	return randomDigits(intOr(s.CodeLength, 6), src)
+}
+
+func randomDigits(n int, src io.Reader) (string, error) {
+	if src == nil {
+		src = rand.Reader
+	}
 	b := make([]byte, n)
 	for i := range b {
-		d, err := rand.Int(rand.Reader, big.NewInt(10))
+		d, err := rand.Int(src, big.NewInt(10))
 		if err != nil {
 			return "", err
 		}

@@ -100,26 +100,32 @@ func ClientIP(r *http.Request) string {
 
 // clientIP applies trusted-proxy rules. An empty trusted list matches ClientIP.
 // When the peer is trusted, X-Forwarded-For is walked from the right and the
-// first hop that is not itself a trusted proxy is the client. Spoofed values
-// to the left of the real client are ignored. If every hop is trusted, the
-// peer (RemoteAddr) is the client — the leftmost value is not.
+// first valid address that is not itself a trusted proxy is the client.
+// Spoofed values to the left of that client are ignored. If every hop is
+// trusted, the peer (RemoteAddr) is the client — the leftmost value is not.
+//
+// A hop that is not a valid IP is never a rate-limit key. The walk stops and
+// the TCP peer is used, so a caller cannot rotate illegal strings into fresh
+// buckets. Hops to the left of that invalid hop are ignored with it. Accepted
+// addresses are canonical (IPv4-mapped IPv6 unmapped, zone stripped) so
+// equivalent spellings share one bucket.
 func clientIP(r *http.Request, trusted []netip.Prefix) string {
 	peer := remoteHost(r)
 	if len(trusted) == 0 || !ipInPrefixes(peer, trusted) {
 		return peer
 	}
-	var hops []string
-	for _, part := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
-		if hop := strings.TrimSpace(part); hop != "" {
-			hops = append(hops, hop)
-		}
-	}
-	if len(hops) == 0 {
-		return peer
-	}
+	hops := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
 	for i := len(hops) - 1; i >= 0; i-- {
-		if !ipInPrefixes(hops[i], trusted) {
-			return hops[i]
+		hop := strings.TrimSpace(hops[i])
+		if hop == "" {
+			continue
+		}
+		addr, ok := parseHopAddr(hop)
+		if !ok {
+			return peer
+		}
+		if !addrInPrefixes(addr, trusted) {
+			return addr.String()
 		}
 	}
 	return peer
@@ -173,16 +179,34 @@ func remoteHost(r *http.Request) string {
 	return host
 }
 
-func ipInPrefixes(host string, prefixes []netip.Prefix) bool {
-	addr, err := netip.ParseAddr(strings.TrimSpace(host))
+// parseHopAddr accepts one X-Forwarded-For hop. Ports, brackets, and other
+// non-address text are rejected. IPv4-mapped IPv6 is unmapped and any zone
+// is dropped so those spellings cannot mint extra rate-limit keys.
+func parseHopAddr(hop string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(hop))
 	if err != nil {
-		return false
+		return netip.Addr{}, false
 	}
-	addr = addr.Unmap()
+	addr = addr.Unmap().WithZone("")
+	if !addr.IsValid() {
+		return netip.Addr{}, false
+	}
+	return addr, true
+}
+
+func addrInPrefixes(addr netip.Addr, prefixes []netip.Prefix) bool {
 	for _, prefix := range prefixes {
 		if prefix.Contains(addr) {
 			return true
 		}
 	}
 	return false
+}
+
+func ipInPrefixes(host string, prefixes []netip.Prefix) bool {
+	addr, ok := parseHopAddr(host)
+	if !ok {
+		return false
+	}
+	return addrInPrefixes(addr, prefixes)
 }

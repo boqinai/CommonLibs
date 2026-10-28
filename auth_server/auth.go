@@ -83,7 +83,9 @@ func WithPhoneValidator(re *regexp.Regexp) Option {
 // omitted. When WithClientIPResolver is also set, the resolver wins.
 //
 // If every forwarded hop is itself trusted, the rate-limit key is the TCP
-// peer (RemoteAddr), not the leftmost X-Forwarded-For value.
+// peer (RemoteAddr), not the leftmost X-Forwarded-For value. A hop that is
+// not a valid IP is not a key either: that header is abandoned and the peer
+// is used, so illegal strings cannot rotate into fresh buckets.
 func WithTrustedProxies(prefixes ...netip.Prefix) Option {
 	copied := append([]netip.Prefix(nil), prefixes...)
 	return func(s *Server) {
