@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // RateLimiter is an in-memory fixed-window counter per key (typically a
@@ -99,10 +101,11 @@ func ClientIP(r *http.Request) string {
 // clientIP applies trusted-proxy rules. An empty trusted list matches ClientIP.
 // When the peer is trusted, X-Forwarded-For is walked from the right and the
 // first hop that is not itself a trusted proxy is the client. Spoofed values
-// to the left of the real client are ignored.
-func clientIP(r *http.Request, trusted []*net.IPNet) string {
+// to the left of the real client are ignored. If every hop is trusted, the
+// peer (RemoteAddr) is the client — the leftmost value is not.
+func clientIP(r *http.Request, trusted []netip.Prefix) string {
 	peer := remoteHost(r)
-	if len(trusted) == 0 || !ipInNets(peer, trusted) {
+	if len(trusted) == 0 || !ipInPrefixes(peer, trusted) {
 		return peer
 	}
 	var hops []string
@@ -115,11 +118,51 @@ func clientIP(r *http.Request, trusted []*net.IPNet) string {
 		return peer
 	}
 	for i := len(hops) - 1; i >= 0; i-- {
-		if !ipInNets(hops[i], trusted) {
+		if !ipInPrefixes(hops[i], trusted) {
 			return hops[i]
 		}
 	}
-	return hops[0]
+	return peer
+}
+
+// ParseTrustedProxies parses a PENNY_TRUSTED_PROXIES-style list of IP
+// addresses and CIDRs. Separators are commas, semicolons, and whitespace.
+// An empty string is valid and means no trusted proxies. Invalid entries
+// return an error; nothing here panics.
+func ParseTrustedProxies(raw string) ([]netip.Prefix, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || unicode.IsSpace(r)
+	})
+	out := make([]netip.Prefix, 0, len(fields))
+	for _, field := range fields {
+		prefix, err := parseTrustedProxy(field)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, prefix)
+	}
+	return out, nil
+}
+
+func parseTrustedProxy(v string) (netip.Prefix, error) {
+	if strings.Contains(v, "/") {
+		prefix, err := netip.ParsePrefix(v)
+		if err != nil {
+			return netip.Prefix{}, fmt.Errorf("invalid trusted proxy %q: %w", v, err)
+		}
+		return prefix.Masked(), nil
+	}
+	addr, err := netip.ParseAddr(v)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("invalid trusted proxy %q", v)
+	}
+	addr = addr.Unmap()
+	bits := addr.BitLen()
+	return netip.PrefixFrom(addr, bits).Masked(), nil
 }
 
 func remoteHost(r *http.Request) string {
@@ -130,47 +173,14 @@ func remoteHost(r *http.Request) string {
 	return host
 }
 
-func parseTrustedProxies(values []string) ([]*net.IPNet, error) {
-	out := make([]*net.IPNet, 0, len(values))
-	for _, raw := range values {
-		v := strings.TrimSpace(raw)
-		if v == "" {
-			return nil, fmt.Errorf("empty trusted proxy")
-		}
-		if strings.Contains(v, "/") {
-			_, network, err := net.ParseCIDR(v)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", v, err)
-			}
-			out = append(out, network)
-			continue
-		}
-		ip := net.ParseIP(v)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid trusted proxy %q", v)
-		}
-		if v4 := ip.To4(); v4 != nil {
-			out = append(out, &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)})
-			continue
-		}
-		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)})
-	}
-	return out, nil
-}
-
-func ipInNets(host string, nets []*net.IPNet) bool {
-	ip := net.ParseIP(strings.TrimSpace(host))
-	if ip == nil {
+func ipInPrefixes(host string, prefixes []netip.Prefix) bool {
+	addr, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
 		return false
 	}
-	for _, network := range nets {
-		candidate := ip
-		if len(network.IP) == net.IPv4len {
-			if v4 := ip.To4(); v4 != nil {
-				candidate = v4
-			}
-		}
-		if network.Contains(candidate) {
+	addr = addr.Unmap()
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
 			return true
 		}
 	}

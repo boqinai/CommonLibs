@@ -1,6 +1,6 @@
 name: app_update
 description: Shared Android in-app update client for Boqinai Flutter apps.
-version: 0.10.1
+version: 0.10.2
 publish_to: none
 
 environment:

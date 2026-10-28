@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -51,12 +52,18 @@ type TokenPair struct {
 // The default implementation is MemoryTokenBlacklist: process-local, no
 // database. Hosts that run more than one instance need a shared store
 // (WithTokenBlacklist or NewSQLiteTokenBlacklist).
+//
+// Prune bulk-deletes rows whose expiry is at or before now. Memory and
+// SQLite implementations sample it from Consume (about every 32 calls).
+// Hosts may also call it on a timer.
 type TokenBlacklist interface {
 	Revoke(ctx context.Context, jti string, exp time.Time) error
 	IsRevoked(ctx context.Context, jti string) (bool, error)
 	// Consume revokes jti when it is not already revoked and exp is still
 	// in the future. It returns true only for the caller that wins.
 	Consume(ctx context.Context, jti string, exp time.Time) (bool, error)
+	// Prune deletes revocation records that expire at or before now.
+	Prune(ctx context.Context, now time.Time) error
 }
 
 // MemoryTokenBlacklist keeps revoked jti values in memory until exp.
@@ -64,9 +71,12 @@ type TokenBlacklist interface {
 type MemoryTokenBlacklist struct {
 	mu    sync.Mutex
 	until map[string]time.Time
+	ops   atomic.Uint32
 	// now is replaceable by tests. Production leaves it nil (time.Now).
 	now func() time.Time
 }
+
+const blacklistPruneEvery = 32
 
 // NewMemoryTokenBlacklist returns an empty in-memory blacklist.
 func NewMemoryTokenBlacklist() *MemoryTokenBlacklist {
@@ -100,10 +110,22 @@ func (m *MemoryTokenBlacklist) Revoke(_ context.Context, jti string, exp time.Ti
 	if m.until == nil {
 		m.until = map[string]time.Time{}
 	}
-	if len(m.until) > 1024 {
+	m.maybeCompactLocked(now)
+	m.until[jti] = exp
+	return nil
+}
+
+func (m *MemoryTokenBlacklist) maybeCompactLocked(now time.Time) {
+	if m.ops.Add(1)%blacklistPruneEvery == 0 || len(m.until) > 1024 {
 		m.compactLocked(now)
 	}
-	m.until[jti] = exp
+}
+
+// Prune deletes expired revocation records.
+func (m *MemoryTokenBlacklist) Prune(_ context.Context, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.compactLocked(now)
 	return nil
 }
 
@@ -139,9 +161,7 @@ func (m *MemoryTokenBlacklist) Consume(_ context.Context, jti string, exp time.T
 	if m.until == nil {
 		m.until = map[string]time.Time{}
 	}
-	if len(m.until) > 1024 {
-		m.compactLocked(now)
-	}
+	m.maybeCompactLocked(now)
 	if existing, ok := m.until[jti]; ok && existing.After(now) {
 		return false, nil
 	}
@@ -180,6 +200,13 @@ func (s *Server) IssueTokens(userID int64) (TokenPair, error) {
 }
 
 func (s *Server) sign(userID int64, typ string, ttl time.Duration) (string, string, time.Time, error) {
+	if s.signer != nil {
+		return s.signer(userID, typ, ttl)
+	}
+	return s.signHS256(userID, typ, ttl)
+}
+
+func (s *Server) signHS256(userID int64, typ string, ttl time.Duration) (string, string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(ttl)
 	jti, err := newJTI()
@@ -272,8 +299,16 @@ func (s *Server) Refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, CodeInternalError, "login failed")
 		return
 	}
+	// Sign the replacement pair before revoking the presented refresh token.
+	// A signer or issuance failure must leave the caller's session usable.
+	pair, err := s.IssueTokens(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "token creation failed")
+		return
+	}
 	// Consume is check-and-revoke in one critical section. Two refreshes of
 	// the same token cannot both observe "not revoked" and then both revoke.
+	// The new pair is returned only when this call wins.
 	if s.blacklist != nil {
 		won, err := s.blacklist.Consume(r.Context(), claims.ID, claims.ExpiresAt.Time)
 		if err != nil {
@@ -285,12 +320,11 @@ func (s *Server) Refresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	body, err := s.tokenPairJSON(userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, CodeInternalError, "token creation failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":         pair.AccessToken,
+		"refresh_token": pair.RefreshToken,
+		"expires_in":    int64(pair.ExpiresIn / time.Second),
+	})
 }
 
 // Logout revokes the bearer access token (signature checked, expiry ignored)

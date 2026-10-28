@@ -84,11 +84,17 @@ type SMSCodes struct {
 	DailyLimit  int            // default 10 per phone per 24h
 	CodeLength  int            // default 6
 	PhoneFormat *regexp.Regexp // default MainlandPhone
-	Now         func() time.Time
+	// IPDailyLimit caps sends per client IP per 24h when the context carries
+	// an IP via WithSMSClientIP (SendSMSCode sets it). Zero uses
+	// defaultIPDailyLimit, which sits above the default 20/hour HTTP limiter.
+	// A negative value disables the cap.
+	IPDailyLimit int
+	Now          func() time.Time
 
-	mu    sync.Mutex
-	codes map[string]*smsCode
-	sends map[string][]time.Time
+	mu      sync.Mutex
+	codes   map[string]*smsCode
+	sends   map[string][]time.Time
+	ipSends map[string][]time.Time
 }
 
 type smsCode struct {
@@ -134,48 +140,84 @@ func (s *SMSCodes) hashCode(code string) [32]byte {
 	return out
 }
 
-const smsMapSoftCap = 10_000
+const (
+	smsMapSoftCap = 10_000
+	// defaultIPDailyLimit is above the default 20/hour send route limiter
+	// (480/day), so that limiter still binds first.
+	defaultIPDailyLimit = 1000
+)
 
 type sendActivity struct {
 	phone string
 	last  time.Time
 }
 
-// compactLocked drops send timestamps older than 24h, deletes empty keys,
-// and if the send map is still above smsMapSoftCap evicts the phones whose
-// last activity is oldest. Codes for an evicted phone are dropped with it.
+type smsClientIPKey struct{}
+
+// WithSMSClientIP attaches the client IP used by SMSCodes.IPDailyLimit.
+// SendSMSCode sets it from the server's client-IP policy.
+func WithSMSClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, smsClientIPKey{}, strings.TrimSpace(ip))
+}
+
+func smsClientIP(ctx context.Context) string {
+	ip, _ := ctx.Value(smsClientIPKey{}).(string)
+	return ip
+}
+
+// compactLocked drops send timestamps older than 24h and deletes empty keys.
+// An entry is evicted for the soft cap only when it has no active code and
+// no sends inside the daily window. Protected entries stay even if the map
+// remains above the cap; Send refuses new numbers instead of resetting them.
 // Callers must hold s.mu.
 func (s *SMSCodes) compactLocked(now time.Time) {
 	if s.sends == nil {
 		s.sends = map[string][]time.Time{}
 	}
-	activities := make([]sendActivity, 0, len(s.sends))
-	for phone, times := range s.sends {
-		kept := make([]time.Time, 0, len(times))
-		var last time.Time
-		for _, ts := range times {
-			if now.Sub(ts) >= 24*time.Hour {
-				continue
-			}
-			kept = append(kept, ts)
-			if last.IsZero() || ts.After(last) {
-				last = ts
-			}
-		}
-		if len(kept) == 0 {
-			delete(s.sends, phone)
-			continue
-		}
-		s.sends[phone] = kept
-		activities = append(activities, sendActivity{phone: phone, last: last})
+	if s.ipSends == nil {
+		s.ipSends = map[string][]time.Time{}
 	}
+	s.pruneSendMapLocked(s.sends, now, true)
+	s.pruneSendMapLocked(s.ipSends, now, false)
 	for phone, c := range s.codes {
 		if c == nil || now.After(c.expires) {
 			delete(s.codes, phone)
 		}
 	}
+	s.evictUnprotectedLocked(now)
+}
+
+func (s *SMSCodes) pruneSendMapLocked(entries map[string][]time.Time, now time.Time, keepActiveCodes bool) {
+	for key, times := range entries {
+		kept := sendsWithinWindow(times, now)
+		if len(kept) == 0 {
+			if keepActiveCodes && s.hasActiveCodeLocked(key, now) {
+				entries[key] = nil
+				continue
+			}
+			delete(entries, key)
+			continue
+		}
+		entries[key] = kept
+	}
+}
+
+func (s *SMSCodes) evictUnprotectedLocked(now time.Time) {
 	if len(s.sends) <= smsMapSoftCap {
 		return
+	}
+	activities := make([]sendActivity, 0)
+	for phone, times := range s.sends {
+		if s.protectedLocked(phone, times, now) {
+			continue
+		}
+		var last time.Time
+		for _, ts := range times {
+			if last.IsZero() || ts.After(last) {
+				last = ts
+			}
+		}
+		activities = append(activities, sendActivity{phone: phone, last: last})
 	}
 	sort.Slice(activities, func(i, j int) bool {
 		if activities[i].last.Equal(activities[j].last) {
@@ -183,11 +225,87 @@ func (s *SMSCodes) compactLocked(now time.Time) {
 		}
 		return activities[i].last.Before(activities[j].last)
 	})
-	extra := len(s.sends) - smsMapSoftCap
-	for i := 0; i < extra && i < len(activities); i++ {
-		delete(s.sends, activities[i].phone)
-		delete(s.codes, activities[i].phone)
+	for _, activity := range activities {
+		if len(s.sends) <= smsMapSoftCap {
+			return
+		}
+		if s.protectedLocked(activity.phone, s.sends[activity.phone], now) {
+			continue
+		}
+		delete(s.sends, activity.phone)
+		delete(s.codes, activity.phone)
 	}
+}
+
+func (s *SMSCodes) protectedLocked(phone string, times []time.Time, now time.Time) bool {
+	if s.hasActiveCodeLocked(phone, now) {
+		return true
+	}
+	return len(sendsWithinWindow(times, now)) > 0
+}
+
+func (s *SMSCodes) hasActiveCodeLocked(phone string, now time.Time) bool {
+	c := s.codes[phone]
+	return c != nil && !now.After(c.expires)
+}
+
+func sendsWithinWindow(times []time.Time, now time.Time) []time.Time {
+	kept := make([]time.Time, 0, len(times))
+	for _, ts := range times {
+		if now.Sub(ts) < 24*time.Hour {
+			kept = append(kept, ts)
+		}
+	}
+	return kept
+}
+
+func (s *SMSCodes) ipDailyLimit() int {
+	if s.IPDailyLimit < 0 {
+		return -1
+	}
+	if s.IPDailyLimit == 0 {
+		return defaultIPDailyLimit
+	}
+	return s.IPDailyLimit
+}
+
+// reserveIPLocked records one send for ip. A new IP is refused when the IP
+// map is still at the cap after compaction. Callers must hold s.mu.
+func (s *SMSCodes) reserveIPLocked(ip string, now time.Time) error {
+	if ip == "" || s.ipDailyLimit() < 0 {
+		return nil
+	}
+	if s.ipSends == nil {
+		s.ipSends = map[string][]time.Time{}
+	}
+	kept := sendsWithinWindow(s.ipSends[ip], now)
+	if len(kept) == 0 {
+		delete(s.ipSends, ip)
+		if len(s.ipSends) >= smsMapSoftCap {
+			return ErrTooFrequent
+		}
+	}
+	if len(kept) >= s.ipDailyLimit() {
+		s.ipSends[ip] = kept
+		return ErrDailyLimit
+	}
+	s.ipSends[ip] = append(kept, now)
+	return nil
+}
+
+func (s *SMSCodes) rollbackIPLocked(ip string, now time.Time) {
+	if ip == "" || s.ipSends == nil {
+		return
+	}
+	history := s.ipSends[ip]
+	if len(history) > 0 && history[len(history)-1].Equal(now) {
+		history = history[:len(history)-1]
+	}
+	if len(history) == 0 {
+		delete(s.ipSends, ip)
+		return
+	}
+	s.ipSends[ip] = history
 }
 
 // ValidPhone reports whether phone matches PhoneFormat.
@@ -208,25 +326,32 @@ func (s *SMSCodes) Send(ctx context.Context, phone string) error {
 		return ErrInvalidPhone
 	}
 	now := s.now()
+	ip := smsClientIP(ctx)
 	s.mu.Lock()
 	if s.sends == nil {
 		s.sends, s.codes = map[string][]time.Time{}, map[string]*smsCode{}
 	}
-	if len(s.sends) > smsMapSoftCap || len(s.codes) > smsMapSoftCap {
+	if len(s.sends) >= smsMapSoftCap || len(s.codes) >= smsMapSoftCap || len(s.ipSends) >= smsMapSoftCap {
 		s.compactLocked(now)
 	}
-	recent := s.sends[phone][:0:0]
-	for _, t := range s.sends[phone] {
-		if now.Sub(t) < 24*time.Hour {
-			recent = append(recent, t)
-		}
+	if _, known := s.sends[phone]; !known && !s.hasActiveCodeLocked(phone, now) &&
+		(len(s.sends) >= smsMapSoftCap || len(s.codes) >= smsMapSoftCap) {
+		s.mu.Unlock()
+		return ErrTooFrequent
 	}
+	if err := s.reserveIPLocked(ip, now); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	recent := sendsWithinWindow(s.sends[phone], now)
 	s.sends[phone] = recent
 	if n := len(recent); n > 0 && now.Sub(recent[n-1]) < durOr(s.Cooldown, time.Minute) {
+		s.rollbackIPLocked(ip, now)
 		s.mu.Unlock()
 		return ErrTooFrequent
 	}
 	if len(recent) >= intOr(s.DailyLimit, 10) {
+		s.rollbackIPLocked(ip, now)
 		s.mu.Unlock()
 		return ErrDailyLimit
 	}
@@ -242,7 +367,11 @@ func (s *SMSCodes) Send(ctx context.Context, phone string) error {
 			s.mu.Lock() // not delivered: release the reservation
 			if l := s.sends[phone]; len(l) > 0 && l[len(l)-1].Equal(now) {
 				s.sends[phone] = l[:len(l)-1]
+				if len(s.sends[phone]) == 0 {
+					delete(s.sends, phone)
+				}
 			}
+			s.rollbackIPLocked(ip, now)
 			s.mu.Unlock()
 		}
 		return err
@@ -377,7 +506,8 @@ func (s *Server) SendSMSCode(codes *SMSCodes) http.Handler {
 			return
 		}
 		phone := strings.TrimSpace(in.Phone)
-		switch err := codes.Send(r.Context(), phone); {
+		ctx := WithSMSClientIP(r.Context(), s.requestClientIP(r))
+		switch err := codes.Send(ctx, phone); {
 		case err == nil:
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cooldown": codes.CooldownSeconds()})
 		case errors.Is(err, ErrInvalidPhone):

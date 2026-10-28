@@ -1,3 +1,7 @@
+## 0.10.2
+
+- The download commit renames the previous APK to `.bak` before publishing the new file. If a timeout wins during that swap, rollback restores the backup and deletes only the staged `.ready` file, so an installable APK remains.
+
 ## 0.10.1
 
 - Android 15 `onTimeout` and the download worker share one `DownloadTaskGate`. `SUCCESS`, `FAILED`, `CANCELLED`, and `TIMED_OUT` are compare-and-set from `RUNNING`, so a timeout can no longer be overwritten by `STATUS_SUCCESSFUL`. Only the owner moves the APK, writes the terminal status, and updates the notification.

@@ -118,6 +118,15 @@ jobs:
             app_update/android/src/test/kotlin/com/boqinai/app_update/DownloadTaskGateTest.kt \
             -include-runtime -d /tmp/download-gate.jar
           java -jar /tmp/download-gate.jar
+      - name: Android download commit rollback
+        run: |
+          set -eu
+          kotlinc \
+            app_update/android/src/main/kotlin/com/boqinai/app_update/DownloadTaskGate.kt \
+            app_update/android/src/main/kotlin/com/boqinai/app_update/ApkInstallCommit.kt \
+            app_update/android/src/test/kotlin/com/boqinai/app_update/ApkInstallCommitTest.kt \
+            -include-runtime -d /tmp/apk-commit.jar
+          java -jar /tmp/apk-commit.jar
       - name: Android fusion start_failed race
         run: |
           set -eu
@@ -126,6 +135,15 @@ jobs:
             fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionStartGateTest.kt \
             -include-runtime -d /tmp/fusion-gate.jar
           java -jar /tmp/fusion-gate.jar
+      - name: Android fusion plugin start_failed
+        run: |
+          set -eu
+          kotlinc \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionStartGate.kt \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionSceneController.kt \
+            fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionSceneControllerTest.kt \
+            -include-runtime -d /tmp/fusion-scene.jar
+          java -jar /tmp/fusion-scene.jar
       - name: iOS fusion start_failed race
         run: |
           set -eu
@@ -135,3 +153,13 @@ jobs:
             fusion_auth/ios/Tests/fusion_start_gate_test.c \
             -o /tmp/fusion_start_gate_test
           /tmp/fusion_start_gate_test
+      - name: iOS fusion session generation
+        run: |
+          set -eu
+          gcc -Wall -Werror -std=c11 -pthread \
+            -I fusion_auth/ios/Classes \
+            fusion_auth/ios/Classes/FusionStartGate.c \
+            fusion_auth/ios/Classes/FusionSession.c \
+            fusion_auth/ios/Tests/fusion_session_test.c \
+            -o /tmp/fusion_session_test
+          /tmp/fusion_session_test

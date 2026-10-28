@@ -401,6 +401,8 @@ func (f flakyBlacklist) Consume(context.Context, string, time.Time) (bool, error
 	return true, nil
 }
 
+func (f flakyBlacklist) Prune(context.Context, time.Time) error { return nil }
+
 func TestBlacklistFailuresAndMemoryTTL(t *testing.T) {
 	_, _, mux := newTokenServer(t, WithTokenBlacklist(flakyBlacklist{failRead: true}))
 	if code, _ := postAuth(t, mux, "/api/auth/register", `{"phone":"13800000000","password":"12345678"}`, ""); code != http.StatusCreated {
@@ -560,6 +562,69 @@ func TestConsumeAtomic(t *testing.T) {
 	ok, err = bl.Consume(context.Background(), "", exp)
 	if err != nil || ok {
 		t.Fatal("empty jti consumed")
+	}
+}
+
+type consumeCounter struct {
+	TokenBlacklist
+	n atomic.Int32
+}
+
+func (c *consumeCounter) Consume(ctx context.Context, jti string, exp time.Time) (bool, error) {
+	c.n.Add(1)
+	return c.TokenBlacklist.Consume(ctx, jti, exp)
+}
+
+func TestRefreshSignerFailureDoesNotConsume(t *testing.T) {
+	counter := &consumeCounter{TokenBlacklist: NewMemoryTokenBlacklist()}
+	srv, _, mux := newTokenServer(t, WithTokenBlacklist(counter))
+	if code, _ := postAuth(t, mux, "/api/auth/register", `{"phone":"13800000000","password":"12345678"}`, ""); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	_, login := postAuth(t, mux, "/api/auth/login", `{"phone":"13800000000","password":"12345678"}`, "")
+	refresh, _ := login["refresh_token"].(string)
+	if refresh == "" {
+		t.Fatal("missing refresh token")
+	}
+	before := counter.n.Load()
+	srv.signer = func(int64, string, time.Duration) (string, string, time.Time, error) {
+		return "", "", time.Time{}, errors.New("signer down")
+	}
+	if code, body := postAuth(t, mux, "/api/auth/refresh", `{"refresh_token":"`+refresh+`"}`, ""); code != http.StatusInternalServerError || body["code"] != CodeInternalError {
+		t.Fatalf("signer failure: %d %v", code, body)
+	}
+	if counter.n.Load() != before {
+		t.Fatalf("consume calls %d, want %d", counter.n.Load(), before)
+	}
+	srv.signer = nil
+	code, rotated := postAuth(t, mux, "/api/auth/refresh", `{"refresh_token":"`+refresh+`"}`, "")
+	if code != http.StatusOK || rotated["token"] == "" || rotated["refresh_token"] == "" {
+		t.Fatalf("refresh after signer failure: %d %v", code, rotated)
+	}
+	if code, body := postAuth(t, mux, "/api/auth/refresh", `{"refresh_token":"`+refresh+`"}`, ""); code != http.StatusUnauthorized || body["code"] != CodeInvalidRefreshToken {
+		t.Fatalf("replay: %d %v", code, body)
+	}
+}
+
+func TestMemoryPrune(t *testing.T) {
+	bl := NewMemoryTokenBlacklist()
+	now := time.Unix(1_700_000_000, 0)
+	bl.now = func() time.Time { return now }
+	if err := bl.Revoke(context.Background(), "live", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	bl.mu.Lock()
+	bl.until["stale"] = now.Add(-time.Second)
+	bl.mu.Unlock()
+	if err := bl.Prune(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	bl.mu.Lock()
+	_, stale := bl.until["stale"]
+	_, live := bl.until["live"]
+	bl.mu.Unlock()
+	if stale || !live {
+		t.Fatalf("stale=%v live=%v", stale, live)
 	}
 }
 

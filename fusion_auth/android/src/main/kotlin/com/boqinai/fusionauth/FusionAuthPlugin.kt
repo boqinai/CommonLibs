@@ -5,8 +5,6 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 import com.alicom.fusion.auth.AlicomFusionAuthCallBack
 import com.alicom.fusion.auth.AlicomFusionBusiness
 import com.alicom.fusion.auth.AlicomFusionLog
@@ -34,9 +32,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     private var business: AlicomFusionBusiness? = null
     private var templateId = ""
     @Volatile private var authToken = ""
-    private val pending = AtomicReference<MethodChannel.Result?>(null)
-    private val gate = FusionStartGate()
-    private val sessionGeneration = AtomicLong()
+    private val scene = FusionSceneController()
     private var halfWay: HalfWayVerifyResult? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -80,32 +76,27 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         if (token.isEmpty() || scheme.isEmpty() || template.isEmpty()) {
             return result.error("bad_args", "token, schemeCode and templateId are required", null)
         }
-        if (pending.get() != null || business != null) {
+        if (scene.hasPending() || business != null) {
             return result.error("busy", "A fusion scene is already running", null)
         }
-        destroyBusiness()
-        val session = sessionGeneration.incrementAndGet()
-        gate.reset()
-        if (!gate.arm() || !pending.compareAndSet(null, result)) {
-            gate.reset()
-            pending.compareAndSet(result, null)
-            return result.error("busy", "A fusion scene is already running", null)
-        }
-        templateId = template
-        authToken = token
-        try {
-            // Umeng is not bundled; the SDK detects that and skips it.
-            AlicomFusionBusiness.useSDKSupplyUMSDK(false, "fusion_auth")
-            AlicomFusionLog.setLogEnable(false)
-            val b = AlicomFusionBusiness()
-            business = b
-            b.initWithToken(act.applicationContext, scheme, AlicomFusionAuthToken().apply { setAuthToken(token) })
-            b.setAlicomFusionAuthCallBack(callback(session))
-            b.startSceneWithTemplateId(act, template)
-        } catch (t: Throwable) {
-            // One terminal status. release used to complete pending as cancelled
-            // after resolve posted start_failed asynchronously.
-            release("start_failed", t.message ?: t.javaClass.simpleName)
+        val rejected = scene.launch(
+            onResult = { terminal -> succeed(result, terminal) },
+            destroySdk = { destroySdk() },
+            startSdk = { session ->
+                templateId = template
+                authToken = token
+                // Umeng is not bundled; the SDK detects that and skips it.
+                AlicomFusionBusiness.useSDKSupplyUMSDK(false, "fusion_auth")
+                AlicomFusionLog.setLogEnable(false)
+                val b = AlicomFusionBusiness()
+                business = b
+                b.initWithToken(act.applicationContext, scheme, AlicomFusionAuthToken().apply { setAuthToken(token) })
+                b.setAlicomFusionAuthCallBack(callback(session))
+                b.startSceneWithTemplateId(act, template)
+            },
+        )
+        if (rejected == "busy") {
+            result.error("busy", "A fusion scene is already running", null)
         }
     }
 
@@ -116,19 +107,15 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         if (hw != null) hw.verifyResult(success) else b.continueSceneWithTemplateId(templateId, success)
     }
 
-    private fun resolve(token: String?, code: String, message: String) {
-        val won = gate.complete(code, message, token) ?: return
-        deliver(won)
+    private fun resolve(session: Long, token: String?, code: String, message: String) {
+        scene.resolve(session, token, code, message)
     }
 
     private fun release(code: String, message: String) {
-        val won = gate.complete(code, message, null)
-        destroyBusiness()
-        if (won != null) deliver(won)
+        scene.release(::destroySdk, code, message)
     }
 
-    private fun deliver(terminal: FusionTerminal) {
-        val result = pending.getAndSet(null) ?: return
+    private fun succeed(result: MethodChannel.Result, terminal: FusionTerminal) {
         val payload = mapOf(
             "verifyToken" to terminal.verifyToken,
             "code" to terminal.code,
@@ -141,8 +128,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         }
     }
 
-    private fun destroyBusiness() {
-        sessionGeneration.incrementAndGet()
+    private fun destroySdk() {
         val b = business
         business = null
         halfWay = null
@@ -158,7 +144,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     private fun AlicomFusionEvent?.msg() = this?.errorMsg.orEmpty()
 
     private fun callback(session: Long) = object : AlicomFusionAuthCallBack {
-        private fun active(): Boolean = session == sessionGeneration.get()
+        private fun active(): Boolean = scene.isCurrent(session)
 
         // Asks Dart for a refreshed 鉴权Token (method `onTokenUpdate`). If the
         // host does not answer within a few seconds, or we are already on the
@@ -210,13 +196,13 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
 
         override fun onSDKTokenAuthFailure(token: AlicomFusionAuthToken?, event: AlicomFusionEvent?) {
             if (!active()) return
-            resolve(null, event.code(), event.msg())
+            resolve(session, null, event.code(), event.msg())
             main.post { release("cancelled", "") }
         }
 
         override fun onVerifySuccess(token: String?, nodeName: String?, event: AlicomFusionEvent?) {
             if (!active()) return
-            resolve(token, event.code(), event.msg())
+            resolve(session, token, event.code(), event.msg())
         }
 
         override fun onHalfWayVerifySuccess(
@@ -224,7 +210,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         ) {
             if (!active()) return
             main.post { if (active()) halfWay = result }
-            resolve(maskToken, event.code(), event.msg())
+            resolve(session, maskToken, event.code(), event.msg())
         }
 
         override fun onVerifyFailed(event: AlicomFusionEvent?, nodeName: String?) {
@@ -235,7 +221,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
 
         override fun onTemplateFinish(event: AlicomFusionEvent?) {
             if (!active()) return
-            resolve(null, event.code(), event.msg())
+            resolve(session, null, event.code(), event.msg())
             main.post { release("cancelled", "") }
         }
 

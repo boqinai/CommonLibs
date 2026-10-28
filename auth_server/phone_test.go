@@ -162,7 +162,7 @@ func TestRateLimiterAndClientIP(t *testing.T) {
 	if ClientIP(r) != "10.0.0.1" {
 		t.Fatalf("default ClientIP trusted XFF: %s", ClientIP(r))
 	}
-	trusted, err := parseTrustedProxies([]string{"10.0.0.1"})
+	trusted, err := ParseTrustedProxies("10.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,8 +269,12 @@ func TestTrustedProxyUsesForwardedClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	prefixes, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
 	auth := New(db, []byte("secret"), WithBcryptCost(4),
-		WithTrustedProxies("10.0.0.0/8"),
+		WithTrustedProxies(prefixes...),
 		WithCredentialRateLimiters(NewRateLimiter(1, time.Hour), NewRateLimiter(1, time.Hour)))
 	if err := auth.Init(context.Background()); err != nil {
 		t.Fatal(err)
@@ -338,22 +342,30 @@ func TestSMSCompactBoundsMemory(t *testing.T) {
 	s.sends = map[string][]time.Time{}
 	s.codes = map[string]*smsCode{}
 	total := smsMapSoftCap + 50
+	compactAt := base.Add(time.Duration(total) * time.Second)
 	for i := range total {
 		phone := fmt.Sprintf("13%09d", i)
 		ts := base.Add(time.Duration(i) * time.Second)
 		s.sends[phone] = []time.Time{ts.Add(-48 * time.Hour), ts}
-		s.codes[phone] = &smsCode{expires: ts.Add(time.Minute)}
+		s.codes[phone] = &smsCode{expires: compactAt.Add(time.Minute), hash: s.hashCode("654321")}
 	}
-	now = base.Add(time.Duration(total) * time.Second)
+	now = compactAt
 	s.mu.Lock()
 	s.compactLocked(now)
 	n := len(s.sends)
 	_, oldest := s.sends["13000000000"]
+	_, oldestCode := s.codes["13000000000"]
 	newest := fmt.Sprintf("13%09d", total-1)
 	stamps := append([]time.Time(nil), s.sends[newest]...)
 	s.mu.Unlock()
-	if n != smsMapSoftCap || oldest || len(stamps) != 1 {
-		t.Fatalf("sends=%d oldestKept=%v newestStamps=%v", n, oldest, stamps)
+	if n != total || !oldest || !oldestCode || len(stamps) != 1 {
+		t.Fatalf("protected entries were evicted: sends=%d oldest=%v code=%v stamps=%d", n, oldest, oldestCode, len(stamps))
+	}
+	if err := s.Send(context.Background(), "13900000000"); !errors.Is(err, ErrTooFrequent) {
+		t.Fatalf("new number while over cap: %v", err)
+	}
+	if _, err := s.VerifyPhone(context.Background(), PhoneCredential{Phone: "13000000000", Code: "654321"}); err != nil {
+		t.Fatalf("victim code removed: %v", err)
 	}
 	now = now.Add(24*time.Hour + time.Second)
 	s.mu.Lock()
@@ -385,5 +397,113 @@ func TestSMSCompactBoundsMemory(t *testing.T) {
 	}
 	if _, ok := s.sends["13000000000"]; ok {
 		t.Fatal("stale phone survived Send compact")
+	}
+}
+
+func TestSMSFloodDoesNotResetVictim(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sender := &captureSender{}
+	s := &SMSCodes{
+		Sender:     sender,
+		HMACKey:    []byte("secret"),
+		Cooldown:   time.Nanosecond,
+		DailyLimit: 3,
+		Now:        func() time.Time { return now },
+	}
+	if err := s.Send(context.Background(), "13800138000"); err != nil {
+		t.Fatal(err)
+	}
+	code := sender.last
+	s.mu.Lock()
+	s.sends["13800138000"] = append(s.sends["13800138000"], now.Add(-time.Minute), now.Add(-2*time.Minute))
+	for i := range smsMapSoftCap {
+		phone := fmt.Sprintf("13%09d", i)
+		s.sends[phone] = []time.Time{now}
+		s.codes[phone] = &smsCode{expires: now.Add(time.Minute)}
+	}
+	s.mu.Unlock()
+	if err := s.Send(context.Background(), "13900000000"); !errors.Is(err, ErrTooFrequent) {
+		t.Fatalf("flood phone: %v", err)
+	}
+	now = now.Add(time.Second)
+	if err := s.Send(context.Background(), "13800138000"); !errors.Is(err, ErrDailyLimit) {
+		t.Fatalf("victim daily limit reset: %v", err)
+	}
+	if _, err := s.VerifyPhone(context.Background(), PhoneCredential{Phone: "13800138000", Code: code}); err != nil {
+		t.Fatalf("victim code deleted: %v", err)
+	}
+}
+
+func TestSMSIPDailyLimit(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sender := &captureSender{}
+	s := &SMSCodes{
+		Sender:       sender,
+		HMACKey:      []byte("secret"),
+		Cooldown:     time.Nanosecond,
+		IPDailyLimit: 2,
+		Now:          func() time.Time { return now },
+	}
+	ctx := WithSMSClientIP(context.Background(), "203.0.113.9")
+	for i := range 2 {
+		now = now.Add(time.Second)
+		phone := fmt.Sprintf("1380013800%d", i)
+		if err := s.Send(ctx, phone); err != nil {
+			t.Fatal(i, err)
+		}
+	}
+	now = now.Add(time.Second)
+	if err := s.Send(ctx, "13800138009"); !errors.Is(err, ErrDailyLimit) {
+		t.Fatalf("ip daily: %v", err)
+	}
+	other := WithSMSClientIP(context.Background(), "198.51.100.8")
+	if err := s.Send(other, "13800138008"); err != nil {
+		t.Fatal(err)
+	}
+	sender.err = errors.New("boom")
+	now = now.Add(time.Second)
+	limited := &SMSCodes{
+		Sender:       sender,
+		HMACKey:      []byte("secret"),
+		Cooldown:     time.Nanosecond,
+		IPDailyLimit: 1,
+		Now:          func() time.Time { return now },
+	}
+	if err := limited.Send(ctx, "13800138007"); err == nil {
+		t.Fatal("expected sender failure")
+	}
+	sender.err = nil
+	if err := limited.Send(ctx, "13800138007"); err != nil {
+		t.Fatalf("failed send consumed the ip budget: %v", err)
+	}
+}
+
+func TestParseTrustedProxiesAndAllTrustedHops(t *testing.T) {
+	for _, raw := range []string{"nope", "10.0.0.0/99", "10.0.0.0/8, bogus", "999.1.1.1"} {
+		if _, err := ParseTrustedProxies(raw); err == nil {
+			t.Fatalf("accepted %q", raw)
+		}
+	}
+	empty, err := ParseTrustedProxies("  ")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty: %v %v", err, empty)
+	}
+	prefixes, err := ParseTrustedProxies("10.0.0.0/8, 192.0.2.1; 2001:db8::/32")
+	if err != nil || len(prefixes) != 3 {
+		t.Fatalf("parse: %v %v", err, prefixes)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "10.1.2.3:443"
+	r.Header.Set("X-Forwarded-For", "192.168.1.9, 10.0.0.4")
+	trusted, err := ParseTrustedProxies("10.0.0.0/8, 192.168.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := clientIP(r, trusted); got != "10.1.2.3" {
+		t.Fatalf("all-trusted hops returned %s, want peer", got)
+	}
+	r.Header.Set("X-Forwarded-For", "203.0.113.4, 10.0.0.4")
+	if got := clientIP(r, trusted); got != "203.0.113.4" {
+		t.Fatalf("client hop: %s", got)
 	}
 }

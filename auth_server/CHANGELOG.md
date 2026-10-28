@@ -1,3 +1,11 @@
+## 0.14.0
+
+- **Breaking:** `WithTrustedProxies` takes `...netip.Prefix`, not raw strings, and does not panic. Parse `PENNY_TRUSTED_PROXIES` with `ParseTrustedProxies(string) ([]netip.Prefix, error)` (commas, semicolons, or whitespace). An empty string means no trusted proxies. When every `X-Forwarded-For` hop is trusted, the rate-limit key is the TCP peer (`RemoteAddr`), not the leftmost hop.
+- **Breaking:** `TokenBlacklist` gains `Prune(ctx, now)`, which bulk-deletes expired `jti` rows. `MemoryTokenBlacklist` and `SQLiteTokenBlacklist` sample it from `Consume`.
+- SMS compaction no longer evicts a phone that still has an unexpired code or a send inside the 24h window. Flooding the soft cap cannot reset a victim's daily limit or delete its code. A new number is refused with `ErrTooFrequent` while protected entries still fill the cap. `IPDailyLimit` (default 1000, negative disables) caps sends per client IP per 24h when `WithSMSClientIP` is set; `SendSMSCode` sets it from the server client-IP policy.
+- `SQLiteTokenBlacklist` takes the write lock with `BEGIN IMMEDIATE`, sets `busy_timeout`, and retries `SQLITE_BUSY`. A concurrent refresh loser is revoked (401), not HTTP 500. Statements stay on SQLite 3.22 (`INSERT OR IGNORE`, no UPSERT, no `RETURNING`).
+- `POST /api/auth/refresh` signs the replacement pair before `Consume`. If signing fails, the presented refresh token stays valid.
+
 ## 0.13.0
 
 - **Breaking:** `TokenBlacklist` gains `Consume`, the atomic revoke-if-active used by `POST /api/auth/refresh`. Two refreshes of the same token can no longer both succeed. `MemoryTokenBlacklist.Consume` holds one lock for the check and the insert. `SQLiteTokenBlacklist` does the same in one transaction with `INSERT OR IGNORE` and `RowsAffected` (SQLite 3.22: no UPSERT, no RETURNING).
