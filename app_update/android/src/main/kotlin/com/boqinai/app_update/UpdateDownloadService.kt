@@ -242,22 +242,34 @@ class UpdateDownloadService : Service() {
                 }
                 return
             }
-            // Stage beside the install path, then claim SUCCESS, then move.
-            // A timeout that wins deletes the staged file and does not publish success.
+            // Stage beside the install path, finalize it, and only then claim
+            // SUCCESS. If a timeout wins during the file operation, rollback
+            // removes the finalized file instead of publishing false success.
             val ready = File(destination.absolutePath + ".ready")
             if (ready.exists()) ready.delete()
             if (!partial.renameTo(ready)) {
                 partial.copyTo(ready, overwrite = true)
                 partial.delete()
             }
-            if (!locked(id) { tryComplete(id, TaskState.SUCCESS) }) {
+            val gate = gates[id] ?: run {
                 ready.delete()
                 return
             }
-            if (destination.exists()) destination.delete()
-            if (!ready.renameTo(destination)) {
-                ready.copyTo(destination, overwrite = true)
-                ready.delete()
+            val committed = gate.tryCommitSuccess(
+                commit = {
+                    if (destination.exists()) destination.delete()
+                    if (!ready.renameTo(destination)) {
+                        ready.copyTo(destination, overwrite = true)
+                        ready.delete()
+                    }
+                },
+                rollback = {
+                    destination.delete()
+                    ready.delete()
+                },
+            )
+            if (!committed) {
+                return
             }
             locked(id) {
                 save(id, STATUS_SUCCESSFUL, downloaded, total)

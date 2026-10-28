@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import com.alicom.fusion.auth.AlicomFusionAuthCallBack
 import com.alicom.fusion.auth.AlicomFusionBusiness
@@ -35,6 +36,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     @Volatile private var authToken = ""
     private val pending = AtomicReference<MethodChannel.Result?>(null)
     private val gate = FusionStartGate()
+    private val sessionGeneration = AtomicLong()
     private var halfWay: HalfWayVerifyResult? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -78,8 +80,11 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         if (token.isEmpty() || scheme.isEmpty() || template.isEmpty()) {
             return result.error("bad_args", "token, schemeCode and templateId are required", null)
         }
-        if (pending.get() != null) return result.error("busy", "A fusion scene is already running", null)
+        if (pending.get() != null || business != null) {
+            return result.error("busy", "A fusion scene is already running", null)
+        }
         destroyBusiness()
+        val session = sessionGeneration.incrementAndGet()
         gate.reset()
         if (!gate.arm() || !pending.compareAndSet(null, result)) {
             gate.reset()
@@ -95,7 +100,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
             val b = AlicomFusionBusiness()
             business = b
             b.initWithToken(act.applicationContext, scheme, AlicomFusionAuthToken().apply { setAuthToken(token) })
-            b.setAlicomFusionAuthCallBack(callback)
+            b.setAlicomFusionAuthCallBack(callback(session))
             b.startSceneWithTemplateId(act, template)
         } catch (t: Throwable) {
             // One terminal status. release used to complete pending as cancelled
@@ -117,9 +122,9 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     }
 
     private fun release(code: String, message: String) {
+        val won = gate.complete(code, message, null)
         destroyBusiness()
-        val won = gate.complete(code, message, null) ?: return
-        deliver(won)
+        if (won != null) deliver(won)
     }
 
     private fun deliver(terminal: FusionTerminal) {
@@ -137,6 +142,7 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     }
 
     private fun destroyBusiness() {
+        sessionGeneration.incrementAndGet()
         val b = business
         business = null
         halfWay = null
@@ -151,24 +157,31 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     private fun AlicomFusionEvent?.code() = this?.errorCode.orEmpty()
     private fun AlicomFusionEvent?.msg() = this?.errorMsg.orEmpty()
 
-    private val callback = object : AlicomFusionAuthCallBack {
+    private fun callback(session: Long) = object : AlicomFusionAuthCallBack {
+        private fun active(): Boolean = session == sessionGeneration.get()
+
         // Asks Dart for a refreshed 鉴权Token (method `onTokenUpdate`). If the
         // host does not answer within a few seconds, or we are already on the
         // main thread (cannot block), the token from `start` is reused.
         // Auth tokens typically expire in ~3600s; hosts that keep a scene open
         // that long should supply FusionAuth.onTokenUpdate.
         override fun onSDKTokenUpdate(): AlicomFusionAuthToken {
+            if (!active()) return AlicomFusionAuthToken().apply { setAuthToken("") }
             if (Looper.myLooper() == Looper.getMainLooper()) {
                 return AlicomFusionAuthToken().apply { setAuthToken(authToken) }
             }
             val latch = CountDownLatch(1)
             var refreshed = authToken
             main.post {
+                if (!active()) {
+                    latch.countDown()
+                    return@post
+                }
                 try {
                     channel.invokeMethod("onTokenUpdate", null, object : MethodChannel.Result {
                         override fun success(result: Any?) {
                             val t = result as? String
-                            if (!t.isNullOrBlank()) {
+                            if (active() && !t.isNullOrBlank()) {
                                 authToken = t
                                 refreshed = t
                             }
@@ -196,27 +209,32 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
         override fun onSDKTokenAuthSuccess() {}
 
         override fun onSDKTokenAuthFailure(token: AlicomFusionAuthToken?, event: AlicomFusionEvent?) {
+            if (!active()) return
             resolve(null, event.code(), event.msg())
             main.post { release("cancelled", "") }
         }
 
         override fun onVerifySuccess(token: String?, nodeName: String?, event: AlicomFusionEvent?) {
+            if (!active()) return
             resolve(token, event.code(), event.msg())
         }
 
         override fun onHalfWayVerifySuccess(
             nodeName: String?, maskToken: String?, event: AlicomFusionEvent?, result: HalfWayVerifyResult?,
         ) {
-            main.post { halfWay = result }
+            if (!active()) return
+            main.post { if (active()) halfWay = result }
             resolve(maskToken, event.code(), event.msg())
         }
 
         override fun onVerifyFailed(event: AlicomFusionEvent?, nodeName: String?) {
+            if (!active()) return
             // Let the template move to its fallback node (as the demo does).
-            main.post { business?.continueSceneWithTemplateId(templateId, false) }
+            main.post { if (active()) business?.continueSceneWithTemplateId(templateId, false) }
         }
 
         override fun onTemplateFinish(event: AlicomFusionEvent?) {
+            if (!active()) return
             resolve(null, event.code(), event.msg())
             main.post { release("cancelled", "") }
         }

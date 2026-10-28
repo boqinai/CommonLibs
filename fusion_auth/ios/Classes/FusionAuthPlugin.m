@@ -15,6 +15,9 @@
 @property(nonatomic, assign) BOOL sceneStarted;
 @property(nonatomic, strong) FlutterMethodChannel *channel;
 @property(nonatomic, assign) FusionStartGate *gate;
+- (void)deliverPendingWithToken:(NSString *)token
+                           code:(NSString *)code
+                        message:(NSString *)message;
 @end
 
 @implementation FusionAuthPlugin
@@ -69,7 +72,7 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
                                details:nil]);
     return;
   }
-  if (self.pending != nil) {
+  if (self.pending != nil || self.handler != nil) {
     result([FlutterError errorWithCode:@"busy" message:@"A fusion scene is already running" details:nil]);
     return;
   }
@@ -125,6 +128,12 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
   if (!FusionStartGateComplete(self.gate, codeUtf8, messageUtf8)) {
     return;
   }
+  [self deliverPendingWithToken:token code:code message:message];
+}
+
+- (void)deliverPendingWithToken:(NSString *)token
+                           code:(NSString *)code
+                        message:(NSString *)message {
   FlutterResult r = self.pending;
   self.pending = nil;
   if (r == nil) return;
@@ -143,8 +152,13 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
 }
 
 - (void)releaseSceneWithCode:(NSString *)code message:(NSString *)message {
+  const char *codeUtf8 = code.length > 0 ? code.UTF8String : "";
+  const char *messageUtf8 = message.length > 0 ? message.UTF8String : "";
+  BOOL won = FusionStartGateComplete(self.gate, codeUtf8, messageUtf8);
   [self destroyHandler];
-  [self completeWithToken:nil code:code message:message ?: @""];
+  if (won) {
+    [self deliverPendingWithToken:nil code:code message:message ?: @""];
+  }
 }
 
 - (void)destroyHandler {
@@ -184,7 +198,7 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
   // Ask Dart for a refreshed token. Auth tokens typically last ~3600s; if the
   // host does not answer (or we are on the main thread and cannot block),
   // reuse the token from `start`.
-  if (self.channel == nil || [NSThread isMainThread]) {
+  if (handler != self.handler || self.channel == nil || [NSThread isMainThread]) {
     return [[AlicomFusionAuthToken alloc] initWithTokenStr:self.authToken ?: @""];
   }
   dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -193,7 +207,8 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
     [self.channel invokeMethod:@"onTokenUpdate"
                      arguments:nil
                         result:^(id _Nullable result) {
-                          if ([result isKindOfClass:[NSString class]] &&
+                          if (handler == self.handler &&
+                              [result isKindOfClass:[NSString class]] &&
                               [(NSString *)result length] > 0) {
                             refreshed = (NSString *)result;
                             self.authToken = refreshed;
@@ -222,6 +237,7 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 - (void)onSDKTokenAuthFailure:(AlicomFusionAuthHandler *)handler
                     failToken:(AlicomFusionAuthToken *)failToken
                         error:(AlicomFusionEvent *)error {
+  if (handler != self.handler) return;
   [self resolve:nil code:PFCode(error) message:PFMsg(error)];
   dispatch_async(dispatch_get_main_queue(), ^{
     [self releaseSceneWithCode:@"cancelled" message:@""];
@@ -232,6 +248,7 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
                nodeName:(NSString *)nodeName
               maskToken:(NSString *)maskToken
                   event:(AlicomFusionEvent *)event {
+  if (handler != self.handler) return;
   [self resolve:maskToken code:PFCode(event) message:PFMsg(event)];
 }
 
@@ -240,20 +257,27 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
                      maskToken:(NSString *)maskToken
                          event:(AlicomFusionEvent *)event
                    resultBlock:(void (^)(BOOL))resultBlock {
-  dispatch_async(dispatch_get_main_queue(), ^{ self.halfway = resultBlock; });
+  if (handler != self.handler) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (handler == self.handler) self.halfway = resultBlock;
+  });
   [self resolve:maskToken code:PFCode(event) message:PFMsg(event)];
 }
 
 - (void)onVerifyFailed:(AlicomFusionAuthHandler *)handler
               nodeName:(NSString *)nodeName
                  error:(AlicomFusionEvent *)error {
+  if (handler != self.handler) return;
   // Let the template move to its fallback node (as the demo does).
   dispatch_async(dispatch_get_main_queue(), ^{
-    [self.handler continueSceneWithTemplateId:self.templateId isSuccess:NO];
+    if (handler == self.handler) {
+      [self.handler continueSceneWithTemplateId:self.templateId isSuccess:NO];
+    }
   });
 }
 
 - (void)onTemplateFinish:(AlicomFusionAuthHandler *)handler event:(AlicomFusionEvent *)event {
+  if (handler != self.handler) return;
   [self resolve:nil code:PFCode(event) message:PFMsg(event)];
   dispatch_async(dispatch_get_main_queue(), ^{
     [self releaseSceneWithCode:@"cancelled" message:@""];
