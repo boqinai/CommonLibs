@@ -32,7 +32,9 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
     private var business: AlicomFusionBusiness? = null
     private var templateId = ""
     @Volatile private var authToken = ""
-    private val scene = FusionSceneController()
+    private val scene = FusionSceneController(
+        isMainThread = { Looper.myLooper() == Looper.getMainLooper() },
+    )
     private var halfWay: HalfWayVerifyResult? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {

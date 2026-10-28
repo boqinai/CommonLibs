@@ -82,6 +82,14 @@ if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
 
 其他平台（Web、桌面）没有实现，调用方必须先判断平台。方案号（SchemeCode）、包名/签名、BundleId 与 AccessKey 均属于宿主应用配置，由服务端持有，插件不包含任何密钥。
 
+## Android 线程
+
+`FusionSceneController.launch` 和 `release` 在主线程调用。`FusionAuthPlugin` 用 `Looper.myLooper() == Looper.getMainLooper()` 断言，不在主线程时抛出 `IllegalStateException`。
+
+结果回调在生命周期锁释放之后执行。`startSdk` 和 `destroySdk` 仍在锁内，因此并发的 `release` 会等 SDK 初始化结束，再推进 session generation 并销毁 SDK。
+
+初始化失败时，`launch` 的原子占用要到这次 `launch` 返回才放开。在 `start_failed` 回调里立刻再调用 `launch` 会得到 `busy`：这次重试不会清掉 gate，也不会启动第二次会话。等外层 `launch` 返回后再重试。
+
 ## 验证
 
 ```bash

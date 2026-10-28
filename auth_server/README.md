@@ -127,7 +127,7 @@ if err != nil {
 auth := authserver.New(db, secret, authserver.WithTrustedProxies(prefixes...))
 ```
 
-只解析来自这些代理的 `X-Forwarded-For`，从右向左跳过仍受信任的代理。如果每一跳都在信任列表里，限流键是 TCP 对端 `RemoteAddr`，不是最左边那个值。遇到不是合法 IP 的跳（带端口、括号、或其它无法解析的字符串）时停住，丢弃这一跳及其左边的值，改用 TCP 对端 `RemoteAddr`，因此轮换非法字符串不能换新桶。合法地址会规范成同一写法（IPv4-mapped IPv6 还原成 IPv4，并去掉 zone），同址不同拼法共用一个桶。`ClientIP` 本身仍只返回 `RemoteAddr`。空字符串表示不信任任何代理。
+只解析来自这些代理的 `X-Forwarded-For`，从右向左跳过仍受信任的代理。如果每一跳都在信任列表里，限流键是 TCP 对端 `RemoteAddr`，不是最左边那个值。遇到不是合法 IP 的跳（带端口、括号、或其它无法解析的字符串）时停住，丢弃这一跳及其左边的值，改用 TCP 对端 `RemoteAddr`，因此轮换非法字符串不能换新桶。合法地址会规范成同一写法（IPv4-mapped IPv6 还原成 IPv4，并去掉 zone），同址不同拼法共用一个桶。`ParseTrustedProxies` 把 IPv4-mapped 前缀还原并掩码：`::ffff:10.0.0.0/104` 与未对齐的 `::ffff:10.1.2.3/104` 都是 `10.0.0.0/8`，`::ffff:10.1.2.3/128` 是主机 `10.1.2.3/32`。短于 `/96` 的 mapped 前缀会被拒绝。前缀长度为 0 的项也会被拒绝，包括 `0.0.0.0/0`、`::/0`，以及规范化之后变成 `/0` 的 mapped 写法（`::ffff:0.0.0.0/96`、`::ffff:10.1.2.3/96`）。信任所有地址会让任意对端的 `X-Forwarded-For` 生效。`ClientIP` 本身仍只返回 `RemoteAddr`。空字符串表示不信任任何代理。
 - 错误码见上面的表。短信 / 融合认证路径字符串保持原样。
 - 只需要 JWT 时可单独使用 `Server.UserForPhone` 与 `Server.IssueToken`（仅 access）或 `Server.IssueTokens`（一对）。
 

@@ -1,6 +1,7 @@
 ## 0.15.1
 
-- `ParseTrustedProxies` normalizes IPv4-mapped IPv6 CIDRs such as `::ffff:10.0.0.0/104` to their IPv4 equivalent (`10.0.0.0/8`). Mapped prefixes shorter than `/96` are rejected because they cannot be represented as an IPv4 network after XFF address canonicalization.
+- `ParseTrustedProxies` normalizes IPv4-mapped IPv6 CIDRs such as `::ffff:10.0.0.0/104` to their IPv4 equivalent (`10.0.0.0/8`). The prefix is masked, so a non-aligned form such as `::ffff:10.1.2.3/104` is `10.0.0.0/8` and `::ffff:10.1.2.3/128` is the host `10.1.2.3/32`. Mapped prefixes shorter than `/96` are rejected because they cannot be represented as an IPv4 network after XFF address canonicalization.
+- Prefix length 0 is rejected. That includes `0.0.0.0/0`, `::/0`, and mapped forms that normalize to a `/0` (`::ffff:0.0.0.0/96`, `::ffff:10.1.2.3/96`). A `/0` would treat every peer as a trusted proxy and honor `X-Forwarded-For` from any client.
 
 ## 0.15.0
 
