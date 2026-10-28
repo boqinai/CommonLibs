@@ -2,6 +2,7 @@ package com.boqinai.fusionauth
 
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Plugin-level fusion start session. SDK init is [launch]'s [startSdk]
@@ -17,11 +18,14 @@ class FusionSceneController(
     private val pending = AtomicReference<((FusionTerminal) -> Unit)?>(null)
 
     /**
-     * Launch ownership, independent of [pending] and [gate]. Only the caller
-     * that wins this claim may reset the gate, tear down the SDK, or start
-     * the session. A concurrent launch returns "busy" without those calls.
+     * Launch ownership is independent of [pending] and [gate], so concurrent
+     * and same-thread reentrant launches return busy immediately. The lifecycle
+     * lock also makes release wait for SDK initialization before it advances
+     * the generation or tears down the SDK. It is reentrant so an init failure
+     * can release inline.
      */
     private val launchOwner = AtomicReference<Any?>(null)
+    private val lifecycle = ReentrantLock()
 
     fun hasPending(): Boolean = pending.get() != null
 
@@ -29,7 +33,7 @@ class FusionSceneController(
 
     /**
      * Starts one scene. Returns "busy" when a start is already pending or
-     * another launch owns the attempt. [destroySdk] runs before the new
+     * another lifecycle operation owns the attempt. [destroySdk] runs before the new
      * session and again if init throws. A null return means the SDK call
      * returned or init failed terminally.
      */
@@ -40,6 +44,7 @@ class FusionSceneController(
     ): String? {
         val claim = Any()
         if (!launchOwner.compareAndSet(null, claim)) return "busy"
+        lifecycle.lock()
         try {
             if (pending.get() != null) return "busy"
             destroySdk()
@@ -59,15 +64,21 @@ class FusionSceneController(
                 null
             }
         } finally {
+            lifecycle.unlock()
             launchOwner.compareAndSet(claim, null)
         }
     }
 
     fun release(destroySdk: () -> Unit, code: String, message: String) {
-        val won = gate.complete(code, message, null)
-        generation.incrementAndGet()
-        destroySdk()
-        if (won != null) deliver(won)
+        lifecycle.lock()
+        try {
+            val won = gate.complete(code, message, null)
+            generation.incrementAndGet()
+            destroySdk()
+            if (won != null) deliver(won)
+        } finally {
+            lifecycle.unlock()
+        }
     }
 
     fun resolve(session: Long, token: String?, code: String, message: String) {

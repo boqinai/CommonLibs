@@ -11,6 +11,8 @@ fun main() {
     staleSessionCallbacksAreIgnored()
     pluginLaunchesThroughController()
     concurrentLaunchesOnlyOwnerMutatesSession()
+    releaseWaitsForLaunchInitialization()
+    reentrantLaunchReturnsBusy()
     println("fusion scene controller ok")
 }
 
@@ -127,4 +129,61 @@ private fun concurrentLaunchesOnlyOwnerMutatesSession() {
         check(again == null) { "round $round relaunch after the owner finished returned $again" }
         check(relaunched != 0L && scene.isCurrent(relaunched))
     }
+}
+
+/** A concurrent release cannot invalidate the session midway through launch. */
+private fun releaseWaitsForLaunchInitialization() {
+    val scene = FusionSceneController()
+    val launchEntered = CountDownLatch(1)
+    val allowLaunchReturn = CountDownLatch(1)
+    val launchFinished = CountDownLatch(1)
+    val releaseFinished = CountDownLatch(1)
+    val events = Collections.synchronizedList(mutableListOf<String>())
+    var session = 0L
+    var terminal: FusionTerminal? = null
+
+    Thread {
+        scene.launch(
+            onResult = { terminal = it },
+            destroySdk = { events.add("destroy") },
+            startSdk = {
+                session = it
+                events.add("start")
+                launchEntered.countDown()
+                check(allowLaunchReturn.await(5, TimeUnit.SECONDS))
+                events.add("start-return")
+            },
+        )
+        launchFinished.countDown()
+    }.start()
+    check(launchEntered.await(5, TimeUnit.SECONDS))
+
+    Thread {
+        scene.release({ events.add("release-destroy") }, "cancelled", "detached")
+        events.add("release-return")
+        releaseFinished.countDown()
+    }.start()
+    check(!releaseFinished.await(100, TimeUnit.MILLISECONDS)) { "release crossed an active launch" }
+    check(scene.isCurrent(session))
+
+    allowLaunchReturn.countDown()
+    check(launchFinished.await(5, TimeUnit.SECONDS))
+    check(releaseFinished.await(5, TimeUnit.SECONDS))
+    check(terminal?.code == "cancelled")
+    check(terminal?.message == "detached")
+    check(!scene.isCurrent(session))
+    check(events.indexOf("start-return") < events.indexOf("release-destroy")) { events }
+}
+
+private fun reentrantLaunchReturnsBusy() {
+    val scene = FusionSceneController()
+    var nested: String? = null
+    scene.launch(
+        onResult = {
+            nested = scene.launch(onResult = {}, destroySdk = {}, startSdk = {})
+        },
+        destroySdk = {},
+        startSdk = { throw IllegalStateException("init failed") },
+    )
+    check(nested == "busy") { "reentrant launch returned $nested" }
 }

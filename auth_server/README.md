@@ -24,7 +24,7 @@ mux.Handle("/api/private", auth.RequireAuth(http.HandlerFunc(func(w http.Respons
 引用模块：
 
 ```bash
-go get github.com/boqinai/CommonLibs/auth_server@auth_server/v0.15.0
+go get github.com/boqinai/CommonLibs/auth_server@auth_server/v0.15.1
 ```
 
 使用 `modernc.org/sqlite` 连接池时，应在 DSN 上为每条连接设置 PRAGMA：

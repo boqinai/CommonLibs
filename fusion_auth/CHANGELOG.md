@@ -1,3 +1,7 @@
+## 0.3.4
+
+- Android serializes `release` against SDK initialization while concurrent `launch` calls still return `busy` immediately. Activity/engine detachment can no longer advance the session generation between gate setup and SDK start, leaving the pending Flutter result unresolved.
+
 ## 0.3.3
 
 - Android `FusionSceneController.launch` claims launch ownership with an atomic that is independent of the pending callback and the start gate. A concurrent launch returns `busy` and does not reset the gate, tear down the SDK, or start a second session.

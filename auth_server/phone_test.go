@@ -598,6 +598,25 @@ func TestParseTrustedProxiesAndAllTrustedHops(t *testing.T) {
 	}
 }
 
+func TestParseTrustedProxiesNormalizesIPv4MappedCIDR(t *testing.T) {
+	prefixes, err := ParseTrustedProxies("::ffff:10.0.0.0/104")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefixes) != 1 || prefixes[0].String() != "10.0.0.0/8" {
+		t.Fatalf("mapped prefix: %v", prefixes)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "[::ffff:10.1.2.3]:443"
+	r.Header.Set("X-Forwarded-For", "203.0.113.8")
+	if got := clientIP(r, prefixes); got != "203.0.113.8" {
+		t.Fatalf("mapped trusted peer ignored: %s", got)
+	}
+	if _, err := ParseTrustedProxies("::ffff:0:0/80"); err == nil {
+		t.Fatal("accepted an IPv4-mapped prefix shorter than /96")
+	}
+}
+
 func TestClientIPRejectsUnparsableForwardedHops(t *testing.T) {
 	trusted, err := ParseTrustedProxies("10.0.0.0/8")
 	if err != nil {

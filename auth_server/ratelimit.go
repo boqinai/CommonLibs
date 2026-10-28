@@ -160,6 +160,12 @@ func parseTrustedProxy(v string) (netip.Prefix, error) {
 		if err != nil {
 			return netip.Prefix{}, fmt.Errorf("invalid trusted proxy %q: %w", v, err)
 		}
+		if prefix.Addr().Is4In6() {
+			if prefix.Bits() < 96 {
+				return netip.Prefix{}, fmt.Errorf("invalid trusted proxy %q: IPv4-mapped prefix is shorter than /96", v)
+			}
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+		}
 		return prefix.Masked(), nil
 	}
 	addr, err := netip.ParseAddr(v)

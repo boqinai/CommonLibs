@@ -1,3 +1,7 @@
+## 0.15.1
+
+- `ParseTrustedProxies` normalizes IPv4-mapped IPv6 CIDRs such as `::ffff:10.0.0.0/104` to their IPv4 equivalent (`10.0.0.0/8`). Mapped prefixes shorter than `/96` are rejected because they cannot be represented as an IPv4 network after XFF address canonicalization.
+
 ## 0.15.0
 
 - Trusted-proxy `X-Forwarded-For` hops that are not valid IP addresses are not rate-limit keys. The right-to-left walk stops at the first illegal hop and uses the TCP peer (`RemoteAddr`). Rotating illegal strings cannot mint fresh buckets, and hops to the left of that illegal hop are ignored. Valid hops are canonical (`netip.Addr` with IPv4-mapped addresses unmapped and zones removed), so equivalent spellings share one bucket. `ClientIP` still returns `RemoteAddr` and ignores `X-Forwarded-For`. `ParseTrustedProxies` is unchanged.
