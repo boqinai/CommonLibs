@@ -1,6 +1,8 @@
 ## 0.3.4
 
 - Android serializes `release` against SDK initialization while concurrent `launch` calls still return `busy` immediately. Activity/engine detachment can no longer advance the session generation between gate setup and SDK start, leaving the pending Flutter result unresolved.
+- `launch` and `release` run on the main thread. `FusionAuthPlugin` asserts `Looper.myLooper() == Looper.getMainLooper()`. Result callbacks run after the lifecycle lock is released. `startSdk` and `destroySdk` stay inside that lock so `release` still waits for initialization.
+- A `launch` from the `start_failed` callback, before the failing `launch` returns, returns `busy`. The atomic launch claim is held across that callback, so the retry does not reset the gate or start a second session. Retry after `launch` returns.
 
 ## 0.3.3
 

@@ -135,6 +135,16 @@ func clientIP(r *http.Request, trusted []netip.Prefix) string {
 // addresses and CIDRs. Separators are commas, semicolons, and whitespace.
 // An empty string is valid and means no trusted proxies. Invalid entries
 // return an error; nothing here panics.
+//
+// IPv4-mapped IPv6 prefixes (::ffff:0:0/96 and longer) are rewritten as the
+// corresponding IPv4 prefix so they match canonical X-Forwarded-For
+// addresses. The result is masked, so ::ffff:10.1.2.3/104 is 10.0.0.0/8 and
+// ::ffff:10.1.2.3/128 is the host 10.1.2.3/32. A mapped prefix shorter than
+// /96 is rejected.
+//
+// Prefix length 0 is rejected. That is 0.0.0.0/0, ::/0, and mapped forms
+// that normalize to a /0 (including ::ffff:0.0.0.0/96 and
+// ::ffff:10.1.2.3/96). A /0 would treat every peer as a trusted proxy.
 func ParseTrustedProxies(raw string) ([]netip.Prefix, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -160,13 +170,23 @@ func parseTrustedProxy(v string) (netip.Prefix, error) {
 		if err != nil {
 			return netip.Prefix{}, fmt.Errorf("invalid trusted proxy %q: %w", v, err)
 		}
+		// Reject /0 before unmapping so ::ffff:0.0.0.0/0 is reported as
+		// prefix length 0, not as a mapped prefix shorter than /96.
+		if prefix.Bits() == 0 {
+			return netip.Prefix{}, errTrustedProxyZeroPrefix(v)
+		}
 		if prefix.Addr().Is4In6() {
 			if prefix.Bits() < 96 {
 				return netip.Prefix{}, fmt.Errorf("invalid trusted proxy %q: IPv4-mapped prefix is shorter than /96", v)
 			}
 			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
 		}
-		return prefix.Masked(), nil
+		prefix = prefix.Masked()
+		// ::ffff:0.0.0.0/96 and any other mapped /96 unmap to 0.0.0.0/0.
+		if prefix.Bits() == 0 {
+			return netip.Prefix{}, errTrustedProxyZeroPrefix(v)
+		}
+		return prefix, nil
 	}
 	addr, err := netip.ParseAddr(v)
 	if err != nil {
@@ -175,6 +195,10 @@ func parseTrustedProxy(v string) (netip.Prefix, error) {
 	addr = addr.Unmap()
 	bits := addr.BitLen()
 	return netip.PrefixFrom(addr, bits).Masked(), nil
+}
+
+func errTrustedProxyZeroPrefix(v string) error {
+	return fmt.Errorf("invalid trusted proxy %q: prefix length 0 matches every address", v)
 }
 
 func remoteHost(r *http.Request) string {

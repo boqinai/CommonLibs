@@ -78,9 +78,11 @@ func WithPhoneValidator(re *regexp.Regexp) Option {
 
 // WithTrustedProxies enables X-Forwarded-For parsing for peers in this list.
 // Build the list with ParseTrustedProxies so an invalid PENNY_TRUSTED_PROXIES
-// value returns an error instead of panicking inside New. The header is
-// ignored for every other peer, which is the default when this option is
-// omitted. When WithClientIPResolver is also set, the resolver wins.
+// value returns an error instead of panicking inside New. ParseTrustedProxies
+// rejects prefix length 0, including 0.0.0.0/0, ::/0, and IPv4-mapped forms
+// that normalize to a /0. The header is ignored for every other peer, which
+// is the default when this option is omitted. When WithClientIPResolver is
+// also set, the resolver wins.
 //
 // If every forwarded hop is itself trusted, the rate-limit key is the TCP
 // peer (RemoteAddr), not the leftmost X-Forwarded-For value. A hop that is

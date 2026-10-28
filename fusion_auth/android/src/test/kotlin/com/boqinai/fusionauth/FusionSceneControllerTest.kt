@@ -12,7 +12,9 @@ fun main() {
     pluginLaunchesThroughController()
     concurrentLaunchesOnlyOwnerMutatesSession()
     releaseWaitsForLaunchInitialization()
-    reentrantLaunchReturnsBusy()
+    failureCallbackIsOutsideLockAndRetryIsBusy()
+    releaseCallbackRunsOutsideLock()
+    launchAndReleaseAssertMainThread()
     println("fusion scene controller ok")
 }
 
@@ -58,6 +60,8 @@ private fun pluginLaunchesThroughController() {
     check(src.contains("FusionSceneController"))
     check(src.contains("scene.launch"))
     check(src.contains("scene.isCurrent"))
+    check(src.contains("isMainThread"))
+    check(src.contains("Looper.myLooper() == Looper.getMainLooper()"))
     check(!src.contains("sessionGeneration"))
 }
 
@@ -175,15 +179,120 @@ private fun releaseWaitsForLaunchInitialization() {
     check(events.indexOf("start-return") < events.indexOf("release-destroy")) { events }
 }
 
-private fun reentrantLaunchReturnsBusy() {
+/**
+ * The start_failed callback runs after the lifecycle lock is released and
+ * before launch returns. The launch claim is still held, so a nested launch
+ * returns busy and does not start a second session. A launch once the outer
+ * call has returned proceeds.
+ */
+private fun failureCallbackIsOutsideLockAndRetryIsBusy() {
     val scene = FusionSceneController()
-    var nested: String? = null
-    scene.launch(
+    var nested: String? = "missing"
+    var nestedStarts = 0
+    val probeEntered = CountDownLatch(1)
+    val probeFinished = CountDownLatch(1)
+    val rejected = scene.launch(
         onResult = {
-            nested = scene.launch(onResult = {}, destroySdk = {}, startSdk = {})
+            nested = scene.launch(
+                onResult = {},
+                destroySdk = {},
+                startSdk = { nestedStarts += 1 },
+            )
+            Thread {
+                probeEntered.countDown()
+                scene.release({}, "cancelled", "probe")
+                probeFinished.countDown()
+            }.start()
+            check(probeEntered.await(5, TimeUnit.SECONDS)) { "probe did not start" }
+            check(probeFinished.await(1, TimeUnit.SECONDS)) {
+                "failure callback ran while the lifecycle lock was held"
+            }
         },
         destroySdk = {},
         startSdk = { throw IllegalStateException("init failed") },
     )
+    check(rejected == null)
     check(nested == "busy") { "reentrant launch returned $nested" }
+    check(nestedStarts == 0) { "busy launch started the SDK" }
+    var retried = 0L
+    val again = scene.launch(
+        onResult = {},
+        destroySdk = {},
+        startSdk = { retried = it },
+    )
+    check(again == null) { "launch after the owner returned was $again" }
+    check(retried != 0L && scene.isCurrent(retried))
+}
+
+/** release delivers onResult only after it has dropped the lifecycle lock. */
+private fun releaseCallbackRunsOutsideLock() {
+    val scene = FusionSceneController()
+    val probeEntered = CountDownLatch(1)
+    val probeFinished = CountDownLatch(1)
+    var outside = false
+    val rejected = scene.launch(
+        onResult = {
+            Thread {
+                probeEntered.countDown()
+                scene.release({}, "cancelled", "probe")
+                probeFinished.countDown()
+            }.start()
+            check(probeEntered.await(5, TimeUnit.SECONDS))
+            outside = probeFinished.await(1, TimeUnit.SECONDS)
+        },
+        destroySdk = {},
+        startSdk = {},
+    )
+    check(rejected == null)
+    scene.release({}, "cancelled", "done")
+    check(outside) { "release callback ran while the lifecycle lock was held" }
+    check(!scene.hasPending())
+}
+
+private fun launchAndReleaseAssertMainThread() {
+    var main = true
+    val scene = FusionSceneController(isMainThread = { main })
+    var session = 0L
+    val started = scene.launch(
+        onResult = {},
+        destroySdk = {},
+        startSdk = { session = it },
+    )
+    check(started == null && session != 0L && scene.isCurrent(session))
+
+    main = false
+    val releaseError = catchMainThread {
+        scene.release({}, "cancelled", "off-main")
+    }
+    check(releaseError != null) { "off-main release was accepted" }
+    check(scene.isCurrent(session)) { "off-main release changed the session" }
+    check(scene.hasPending())
+
+    val launchError = catchMainThread {
+        scene.launch(onResult = {}, destroySdk = {}, startSdk = {})
+    }
+    check(launchError != null) { "off-main launch was accepted" }
+    check(scene.isCurrent(session)) { "off-main launch changed the session" }
+
+    main = true
+    scene.release({}, "cancelled", "main")
+    check(!scene.hasPending())
+    check(!scene.isCurrent(session))
+    var relaunched = 0L
+    val again = scene.launch(
+        onResult = {},
+        destroySdk = {},
+        startSdk = { relaunched = it },
+    )
+    check(again == null && relaunched != 0L && scene.isCurrent(relaunched))
+}
+
+private fun catchMainThread(body: () -> Unit): IllegalStateException? {
+    try {
+        body()
+    } catch (error: IllegalStateException) {
+        check(error.message?.contains("main thread") == true) { error.message ?: "" }
+        return error
+    }
+    return null
 }

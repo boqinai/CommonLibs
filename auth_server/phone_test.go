@@ -617,6 +617,108 @@ func TestParseTrustedProxiesNormalizesIPv4MappedCIDR(t *testing.T) {
 	}
 }
 
+func TestParseTrustedProxiesMappedPrefixForms(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{"::ffff:10.1.2.3/128", "10.1.2.3/32"},
+		{"::ffff:a01:203/128", "10.1.2.3/32"},
+		{"::ffff:10.1.2.3/104", "10.0.0.0/8"},
+		{"::ffff:a01:203/104", "10.0.0.0/8"},
+		{"::FFFF:10.1.2.3/112", "10.1.0.0/16"},
+		{"::ffff:10.1.2.3/120", "10.1.2.0/24"},
+		{"::ffff:0a01:0203/120", "10.1.2.0/24"},
+	}
+	for _, tc := range cases {
+		got, err := ParseTrustedProxies(tc.raw)
+		if err != nil || len(got) != 1 || got[0].String() != tc.want {
+			t.Fatalf("%s: got %v err %v, want %s", tc.raw, got, err, tc.want)
+		}
+	}
+
+	host, err := ParseTrustedProxies("::ffff:10.1.2.3/128")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "[::ffff:10.1.2.3]:443"
+	r.Header.Set("X-Forwarded-For", "198.51.100.4")
+	if got := clientIP(r, host); got != "198.51.100.4" {
+		t.Fatalf("mapped /128 peer: %s", got)
+	}
+	r.RemoteAddr = "10.1.2.4:443"
+	r.Header.Set("X-Forwarded-For", "198.51.100.5")
+	if got := clientIP(r, host); got != "10.1.2.4" {
+		t.Fatalf("mapped /128 neighbor trusted XFF: %s", got)
+	}
+
+	wide, err := ParseTrustedProxies("::ffff:10.1.2.3/104")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.RemoteAddr = "[::ffff:10.9.8.7]:443"
+	r.Header.Set("X-Forwarded-For", "203.0.113.8")
+	if got := clientIP(r, wide); got != "203.0.113.8" {
+		t.Fatalf("non-aligned mapped /104: %s", got)
+	}
+	r.RemoteAddr = "11.0.0.1:443"
+	if got := clientIP(r, wide); got != "11.0.0.1" {
+		t.Fatalf("outside non-aligned mapped /104: %s", got)
+	}
+
+	day, err := ParseTrustedProxies("::ffff:a01:203/120")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if day[0].String() != "10.1.2.0/24" {
+		t.Fatalf("hex mapped form: %s", day[0])
+	}
+	r.RemoteAddr = "[::ffff:10.1.2.9]:443"
+	r.Header.Set("X-Forwarded-For", "203.0.113.9")
+	if got := clientIP(r, day); got != "203.0.113.9" {
+		t.Fatalf("non-aligned hex /120: %s", got)
+	}
+	r.RemoteAddr = "[::ffff:10.1.3.1]:443"
+	if got := clientIP(r, day); got != "::ffff:10.1.3.1" {
+		t.Fatalf("outside hex /120: %s", got)
+	}
+}
+
+func TestParseTrustedProxiesRejectsZeroPrefix(t *testing.T) {
+	rejected := []string{
+		"0.0.0.0/0",
+		"0.0.0.1/0",
+		"10.1.2.3/0",
+		"::/0",
+		"::0/0",
+		"2001:db8::/0",
+		"::ffff:0.0.0.0/0",
+		"::ffff:0.0.0.0/96",
+		"::ffff:0:0/96",
+		"::ffff:10.0.0.0/96",
+		"::ffff:10.1.2.3/96",
+		"::ffff:a01:203/96",
+		"::FFFF:10.1.2.3/96",
+	}
+	for _, raw := range rejected {
+		got, err := ParseTrustedProxies(raw)
+		if err == nil || got != nil || !strings.Contains(err.Error(), "prefix length 0") {
+			t.Fatalf("%q: got %v err %v", raw, got, err)
+		}
+	}
+	got, err := ParseTrustedProxies("10.0.0.0/8, ::ffff:0.0.0.0/96")
+	if err == nil || got != nil || !strings.Contains(err.Error(), "prefix length 0") {
+		t.Fatalf("list containing /0: got %v err %v", got, err)
+	}
+	got, err = ParseTrustedProxies("::/0, 192.0.2.1")
+	if err == nil || got != nil || !strings.Contains(err.Error(), "prefix length 0") {
+		t.Fatalf("leading /0: got %v err %v", got, err)
+	}
+	// A mapped prefix shorter than /96 is still rejected, and not as /0.
+	_, err = ParseTrustedProxies("::ffff:10.1.2.3/80")
+	if err == nil || strings.Contains(err.Error(), "prefix length 0") {
+		t.Fatalf("short mapped prefix: %v", err)
+	}
+}
+
 func TestClientIPRejectsUnparsableForwardedHops(t *testing.T) {
 	trusted, err := ParseTrustedProxies("10.0.0.0/8")
 	if err != nil {
