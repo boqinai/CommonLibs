@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -77,16 +77,17 @@ func WithPhoneValidator(re *regexp.Regexp) Option {
 }
 
 // WithTrustedProxies enables X-Forwarded-For parsing for peers in this list.
-// Entries are IP addresses or CIDRs. The header is ignored for every other
-// peer, which is the default when this option is omitted. Invalid entries
-// panic. When WithClientIPResolver is also set, the resolver wins.
-func WithTrustedProxies(proxies ...string) Option {
+// Build the list with ParseTrustedProxies so an invalid PENNY_TRUSTED_PROXIES
+// value returns an error instead of panicking inside New. The header is
+// ignored for every other peer, which is the default when this option is
+// omitted. When WithClientIPResolver is also set, the resolver wins.
+//
+// If every forwarded hop is itself trusted, the rate-limit key is the TCP
+// peer (RemoteAddr), not the leftmost X-Forwarded-For value.
+func WithTrustedProxies(prefixes ...netip.Prefix) Option {
+	copied := append([]netip.Prefix(nil), prefixes...)
 	return func(s *Server) {
-		parsed, err := parseTrustedProxies(proxies)
-		if err != nil {
-			panic("authserver: trusted proxy: " + err.Error())
-		}
-		s.trustedProxies = parsed
+		s.trustedProxies = copied
 	}
 }
 
@@ -115,8 +116,11 @@ type Server struct {
 	refreshLimiter   *RateLimiter
 	phoneValidator   *regexp.Regexp
 	minPasswordLen   int
-	trustedProxies   []*net.IPNet
+	trustedProxies   []netip.Prefix
 	clientIPResolver ClientIPResolver
+	// signer, when set, replaces HS256 issuance. Production leaves it nil.
+	// Tests set it so a failing signer does not consume the refresh token.
+	signer func(userID int64, typ string, ttl time.Duration) (string, string, time.Time, error)
 }
 
 func New(db *sql.DB, jwtSecret []byte, options ...Option) *Server {

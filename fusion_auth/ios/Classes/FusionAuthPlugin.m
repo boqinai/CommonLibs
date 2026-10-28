@@ -1,4 +1,5 @@
 #import "FusionAuthPlugin.h"
+#import "FusionSession.h"
 #import "FusionStartGate.h"
 #import <AlicomFusionAuth/AlicomFusionAuth.h>
 
@@ -6,6 +7,11 @@
 // onVerifySuccess/onHalfwayVerifySuccess resolves the pending `start` with the
 // verify token -> Dart verifies on the host's server -> finish(success) closes the
 // scene or lets the template fall back. Any other end resolves without a token.
+//
+// handlerGeneration is the id returned by FusionSessionBegin for the request
+// that owns self.handler. Every SDK callback captures that id and passes it to
+// FusionSessionAccept so a callback from a previous request cannot land on the
+// next one, including after an async hop.
 @interface FusionAuthPlugin () <AlicomFusionAuthDelegate>
 @property(nonatomic, strong) AlicomFusionAuthHandler *handler;
 @property(nonatomic, copy) FlutterResult pending;
@@ -15,6 +21,8 @@
 @property(nonatomic, assign) BOOL sceneStarted;
 @property(nonatomic, strong) FlutterMethodChannel *channel;
 @property(nonatomic, assign) FusionStartGate *gate;
+@property(nonatomic, assign) FusionSession *session;
+@property(nonatomic, assign) uint64_t handlerGeneration;
 - (void)deliverPendingWithToken:(NSString *)token
                            code:(NSString *)code
                         message:(NSString *)message;
@@ -26,13 +34,16 @@
   self = [super init];
   if (self) {
     _gate = FusionStartGateCreate();
+    _session = FusionSessionCreate();
   }
   return self;
 }
 
 - (void)dealloc {
   FusionStartGateDestroy(_gate);
+  FusionSessionDestroy(_session);
   _gate = NULL;
+  _session = NULL;
 }
 
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar> *)registrar {
@@ -61,6 +72,13 @@
 
 static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v : @""; }
 
+- (BOOL)acceptCallback:(AlicomFusionAuthHandler *)handler
+            generation:(uint64_t)generation
+                  kind:(FusionCallback)kind {
+  if (handler != self.handler) return NO;
+  return FusionSessionAccept(self.session, generation, kind);
+}
+
 - (void)start:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSDictionary *args = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : @{};
   NSString *token = PFString(args[@"token"]);
@@ -86,6 +104,7 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
     result([FlutterError errorWithCode:@"busy" message:@"A fusion scene is already running" details:nil]);
     return;
   }
+  self.handlerGeneration = FusionSessionBegin(self.session);
   self.pending = result;
   self.templateId = template;
   self.authToken = token;
@@ -99,15 +118,21 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
     [h setFusionAuthDelegate:self];
     // startScene waits for onSDKTokenAuthSuccess, as in the SDK demo.
   } @catch (NSException *e) {
-    // One terminal status. resolve(start_failed) used to be posted, then
-    // releaseScene completed the same request synchronously as cancelled.
-    [self releaseSceneWithCode:@"start_failed" message:e.reason ?: e.name ?: @"start_failed"];
+    // One terminal status. FusionSessionInitFailed records start_failed and
+    // drops the generation so a later cancelled cannot replace it.
+    NSString *message = e.reason ?: e.name ?: @"start_failed";
+    BOOL won = FusionSessionInitFailed(self.session, self.gate, message.UTF8String);
+    [self destroySDK];
+    if (won) {
+      [self deliverPendingWithToken:nil code:@"start_failed" message:message];
+    }
   }
 }
 
 - (void)finish:(BOOL)success {
+  uint64_t generation = self.handlerGeneration;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (self.handler == nil) return;
+    if (!FusionSessionIsCurrent(self.session, generation) || self.handler == nil) return;
     void (^hw)(BOOL) = self.halfway;
     self.halfway = nil;
     if (hw != nil) {
@@ -162,6 +187,11 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
 }
 
 - (void)destroyHandler {
+  FusionSessionInvalidate(self.session);
+  [self destroySDK];
+}
+
+- (void)destroySDK {
   AlicomFusionAuthHandler *h = self.handler;
   self.handler = nil;
   self.halfway = nil;
@@ -195,10 +225,14 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 #pragma mark - AlicomFusionAuthDelegate
 
 - (AlicomFusionAuthToken *)onSDKTokenUpdate:(AlicomFusionAuthHandler *)handler {
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_TOKEN_UPDATE]) {
+    return [[AlicomFusionAuthToken alloc] initWithTokenStr:@""];
+  }
   // Ask Dart for a refreshed token. Auth tokens typically last ~3600s; if the
   // host does not answer (or we are on the main thread and cannot block),
   // reuse the token from `start`.
-  if (handler != self.handler || self.channel == nil || [NSThread isMainThread]) {
+  if (self.channel == nil || [NSThread isMainThread]) {
     return [[AlicomFusionAuthToken alloc] initWithTokenStr:self.authToken ?: @""];
   }
   dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -207,7 +241,9 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
     [self.channel invokeMethod:@"onTokenUpdate"
                      arguments:nil
                         result:^(id _Nullable result) {
-                          if (handler == self.handler &&
+                          if ([self acceptCallback:handler
+                                        generation:generation
+                                              kind:FUSION_CB_TOKEN_UPDATE_RESULT] &&
                               [result isKindOfClass:[NSString class]] &&
                               [(NSString *)result length] > 0) {
                             refreshed = (NSString *)result;
@@ -221,8 +257,12 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 }
 
 - (void)onSDKTokenAuthSuccess:(AlicomFusionAuthHandler *)handler {
+  uint64_t generation = self.handlerGeneration;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (handler != self.handler || self.sceneStarted) return;
+    if (![self acceptCallback:handler generation:generation kind:FUSION_CB_TOKEN_AUTH_SUCCESS] ||
+        self.sceneStarted) {
+      return;
+    }
     UIViewController *vc = [self topViewController];
     if (vc == nil) {
       [self resolve:nil code:@"no_activity" message:@"No foreground view controller"];
@@ -237,9 +277,11 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 - (void)onSDKTokenAuthFailure:(AlicomFusionAuthHandler *)handler
                     failToken:(AlicomFusionAuthToken *)failToken
                         error:(AlicomFusionEvent *)error {
-  if (handler != self.handler) return;
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_TOKEN_AUTH_FAILURE]) return;
   [self resolve:nil code:PFCode(error) message:PFMsg(error)];
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (![self acceptCallback:handler generation:generation kind:FUSION_CB_TOKEN_AUTH_FAILURE]) return;
     [self releaseSceneWithCode:@"cancelled" message:@""];
   });
 }
@@ -248,7 +290,8 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
                nodeName:(NSString *)nodeName
               maskToken:(NSString *)maskToken
                   event:(AlicomFusionEvent *)event {
-  if (handler != self.handler) return;
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_VERIFY_SUCCESS]) return;
   [self resolve:maskToken code:PFCode(event) message:PFMsg(event)];
 }
 
@@ -257,9 +300,12 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
                      maskToken:(NSString *)maskToken
                          event:(AlicomFusionEvent *)event
                    resultBlock:(void (^)(BOOL))resultBlock {
-  if (handler != self.handler) return;
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_HALFWAY]) return;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (handler == self.handler) self.halfway = resultBlock;
+    if ([self acceptCallback:handler generation:generation kind:FUSION_CB_HALFWAY_APPLY]) {
+      self.halfway = resultBlock;
+    }
   });
   [self resolve:maskToken code:PFCode(event) message:PFMsg(event)];
 }
@@ -267,19 +313,22 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 - (void)onVerifyFailed:(AlicomFusionAuthHandler *)handler
               nodeName:(NSString *)nodeName
                  error:(AlicomFusionEvent *)error {
-  if (handler != self.handler) return;
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_VERIFY_FAILED]) return;
   // Let the template move to its fallback node (as the demo does).
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (handler == self.handler) {
+    if ([self acceptCallback:handler generation:generation kind:FUSION_CB_VERIFY_FAILED_CONTINUE]) {
       [self.handler continueSceneWithTemplateId:self.templateId isSuccess:NO];
     }
   });
 }
 
 - (void)onTemplateFinish:(AlicomFusionAuthHandler *)handler event:(AlicomFusionEvent *)event {
-  if (handler != self.handler) return;
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_TEMPLATE_FINISH]) return;
   [self resolve:nil code:PFCode(event) message:PFMsg(event)];
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (![self acceptCallback:handler generation:generation kind:FUSION_CB_TEMPLATE_FINISH]) return;
     [self releaseSceneWithCode:@"cancelled" message:@""];
   });
 }
@@ -287,10 +336,14 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
 // Progress notices (900003/900004 start/end loading etc.); the template keeps
 // running and still ends through onTemplateFinish.
 - (void)onVerifyInterrupt:(AlicomFusionAuthHandler *)handler event:(AlicomFusionEvent *)event {
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_VERIFY_INTERRUPT]) return;
 }
 
 - (NSString *)onGetPhoneNumberForVerification:(AlicomFusionAuthHandler *)handler
                                         event:(AlicomFusionEvent *)event {
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_GET_PHONE]) return @"";
   return @"";
 }
 
@@ -298,9 +351,12 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
            protocolName:(NSString *)protocolName
             protocolUrl:(NSString *)protocolUrl
                   event:(AlicomFusionEvent *)event {
+  uint64_t generation = self.handlerGeneration;
+  if (![self acceptCallback:handler generation:generation kind:FUSION_CB_PROTOCOL]) return;
   NSURL *url = [NSURL URLWithString:protocolUrl ?: @""];
   if (url == nil || !([url.scheme isEqualToString:@"https"] || [url.scheme isEqualToString:@"http"])) return;
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (![self acceptCallback:handler generation:generation kind:FUSION_CB_PROTOCOL]) return;
     [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
   });
 }

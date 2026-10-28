@@ -1,5 +1,5 @@
 group = "com.boqinai.app_update"
-version = "0.10.1"
+version = "0.10.2"
 
 plugins {
     id("com.android.library")

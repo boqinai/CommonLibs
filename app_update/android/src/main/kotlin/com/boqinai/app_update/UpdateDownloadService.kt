@@ -242,9 +242,9 @@ class UpdateDownloadService : Service() {
                 }
                 return
             }
-            // Stage beside the install path, finalize it, and only then claim
-            // SUCCESS. If a timeout wins during the file operation, rollback
-            // removes the finalized file instead of publishing false success.
+            // Stage beside the install path, then swap it into place. The previous
+            // APK is kept as .bak until SUCCESS is claimed. If a timeout wins
+            // during the swap, rollback restores that backup and deletes .ready.
             val ready = File(destination.absolutePath + ".ready")
             if (ready.exists()) ready.delete()
             if (!partial.renameTo(ready)) {
@@ -255,19 +255,7 @@ class UpdateDownloadService : Service() {
                 ready.delete()
                 return
             }
-            val committed = gate.tryCommitSuccess(
-                commit = {
-                    if (destination.exists()) destination.delete()
-                    if (!ready.renameTo(destination)) {
-                        ready.copyTo(destination, overwrite = true)
-                        ready.delete()
-                    }
-                },
-                rollback = {
-                    destination.delete()
-                    ready.delete()
-                },
-            )
+            val committed = commitReadyApk(gate, ready, destination)
             if (!committed) {
                 return
             }
