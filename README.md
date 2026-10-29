@@ -18,7 +18,7 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 | --- | --- | --- |
 | `auth_server` | 斜杠 | `auth_server/v0.15.1` |
 | `auth_client` | 连字符 | `auth_client-v0.16.0` |
-| `fusion_auth` | 连字符 | `fusion_auth-v0.3.4` |
+| `fusion_auth` | 连字符 | `fusion_auth-v0.3.5` |
 | `app_update` | 连字符 | `app_update-v0.10.2` |
 | `release_tool` | 连字符 | `release_tool-v0.5.0` |
 

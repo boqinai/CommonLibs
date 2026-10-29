@@ -3,6 +3,7 @@ package com.boqinai.fusionauth
 import android.app.Activity
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import com.alicom.fusion.auth.AlicomFusionAuthCallBack
@@ -92,9 +93,18 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
                 AlicomFusionLog.setLogEnable(false)
                 val b = AlicomFusionBusiness()
                 business = b
-                b.initWithToken(act.applicationContext, scheme, AlicomFusionAuthToken().apply { setAuthToken(token) })
+                Log.i("PennyFusion", "stage=initializing")
+                try {
+                    b.initWithToken(act.applicationContext, scheme, AlicomFusionAuthToken().apply { setAuthToken(token) })
+                } catch (error: Throwable) {
+                    Log.w("PennyFusion", "stage=init_failed type=${error.javaClass.simpleName}")
+                    throw error
+                }
+                // initWithToken creates the SDK's authProxy. Registering before it
+                // dereferences null inside setAlicomFusionAuthCallBack.
                 b.setAlicomFusionAuthCallBack(callback(session))
-                b.startSceneWithTemplateId(act, template)
+                Log.i("PennyFusion", "stage=waiting_for_token_auth")
+                // Start only after token authentication; an early start is ignored by the SDK.
             },
         )
         if (rejected == "busy") {
@@ -194,10 +204,37 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
             return AlicomFusionAuthToken().apply { setAuthToken(refreshed) }
         }
 
-        override fun onSDKTokenAuthSuccess() {}
+        private val sceneStart = FusionSceneStartGate()
+
+        override fun onSDKTokenAuthSuccess() {
+            Log.i("PennyFusion", "stage=token_authenticated")
+            // Token refresh may report success again. Start the scene once per generation,
+            // on the main thread and after the SDK callback returns (per Aliyun's contract).
+            sceneStart.authenticated(
+                isCurrent = ::active,
+                dispatch = { action -> main.post { action() } },
+                start = {
+                    val act = activity
+                    val b = business
+                    if (act == null || b == null) {
+                        release("start_failed", "No foreground activity for the fusion scene")
+                    } else {
+                        try {
+                            Log.i("PennyFusion", "stage=starting_scene")
+                            b.startSceneWithTemplateId(act, templateId)
+                        } catch (error: Throwable) {
+                            Log.w("PennyFusion", "stage=scene_start_failed type=${error.javaClass.simpleName}")
+                            release("start_failed", "Unable to start the fusion scene")
+                        }
+                    }
+                },
+            )
+        }
 
         override fun onSDKTokenAuthFailure(token: AlicomFusionAuthToken?, event: AlicomFusionEvent?) {
             if (!active()) return
+            Log.w("PennyFusion", "stage=token_auth_failed code=${event.code()}")
+            // Preserve the SDK code/message contract exposed by earlier versions.
             resolve(session, null, event.code(), event.msg())
             main.post { release("cancelled", "") }
         }
@@ -217,23 +254,29 @@ class FusionAuthPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activit
 
         override fun onVerifyFailed(event: AlicomFusionEvent?, nodeName: String?) {
             if (!active()) return
+            Log.w("PennyFusion", "stage=verification_failed code=${event.code()}")
             // Let the template move to its fallback node (as the demo does).
             main.post { if (active()) business?.continueSceneWithTemplateId(templateId, false) }
         }
 
         override fun onTemplateFinish(event: AlicomFusionEvent?) {
             if (!active()) return
+            Log.i("PennyFusion", "stage=scene_finished code=${event.code()}")
             resolve(session, null, event.code(), event.msg())
             main.post { release("cancelled", "") }
         }
 
-        override fun onAuthEvent(event: AlicomFusionEvent?) {}
+        override fun onAuthEvent(event: AlicomFusionEvent?) {
+            if (active()) Log.i("PennyFusion", "stage=auth_event code=${event.code()}")
+        }
 
         override fun onGetPhoneNumberForVerification(nodeName: String?, event: AlicomFusionEvent?): String = ""
 
         // Interrupts are progress notices (e.g. 900003/900004 start/end
         // loading) while the template keeps running; the demo only toasts
         // them. The scene still ends through onTemplateFinish.
-        override fun onVerifyInterrupt(event: AlicomFusionEvent?) {}
+        override fun onVerifyInterrupt(event: AlicomFusionEvent?) {
+            if (active()) Log.i("PennyFusion", "stage=verify_interrupt code=${event.code()}")
+        }
     }
 }

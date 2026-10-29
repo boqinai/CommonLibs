@@ -4,7 +4,7 @@
 # bundled: the SDK does not link it (only NSClassFromString lookups).
 Pod::Spec.new do |s|
   s.name             = 'fusion_auth'
-  s.version          = '0.3.4'
+  s.version          = '0.3.5'
   s.summary          = 'Aliyun fusion auth bridge for Boqinai Flutter apps.'
   s.description      = 'Runs the Aliyun 融合认证 template and returns its verify token to Dart.'
   s.homepage         = 'https://github.com/boqinai/CommonLibs/tree/main/fusion_auth'

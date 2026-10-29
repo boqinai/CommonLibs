@@ -8,7 +8,7 @@
 
 | 名称 | 版本 |
 | --- | --- |
-| Flutter 包 / Tag | **0.3.4**（`fusion_auth-v0.3.4`，`pubspec.yaml` 的 `version`） |
+| Flutter 包 / Tag | **0.3.5**（`fusion_auth-v0.3.5`，`pubspec.yaml` 的 `version`） |
 | Android 发布标签 | Maven `com.alicom.fusion:fusionauth:1.2.16`，文件 `fusionauth-1.2.16.aar` |
 | AAR 内部 `android:versionName` | **1.2.8**（清单里的旧构建号；判断 SDK 时以文件名和 Maven 坐标 1.2.16 为准） |
 | iOS 发布标签 | AlicomFusionAuth.xcframework **1.2.15** |
@@ -47,7 +47,7 @@ dependencies:
   fusion_auth:
     git:
       url: https://github.com/boqinai/CommonLibs.git
-      ref: fusion_auth-v0.3.4
+      ref: fusion_auth-v0.3.5
       path: fusion_auth
 ```
 

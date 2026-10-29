@@ -144,6 +144,14 @@ jobs:
             fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionSceneControllerTest.kt \
             -include-runtime -d /tmp/fusion-scene.jar
           java -jar /tmp/fusion-scene.jar
+      - name: Android fusion scene waits for token authentication
+        run: |
+          set -eu
+          kotlinc \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionSceneStartGate.kt \
+            fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionSceneStartGateTest.kt \
+            -include-runtime -d /tmp/fusion-authenticated-start.jar
+          java -jar /tmp/fusion-authenticated-start.jar
       - name: iOS fusion start_failed race
         run: |
           set -eu

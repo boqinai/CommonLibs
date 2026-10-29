@@ -1,3 +1,9 @@
+## 0.3.5
+
+- Android waits for `onSDKTokenAuthSuccess` before posting `startSceneWithTemplateId` to the main thread. Duplicate token-auth success callbacks queue the scene only once, and cancellation before the posted action prevents a stale page from opening.
+- Register the SDK callback only after `initWithToken` creates the underlying auth proxy. Token-auth failures keep exposing the SDK's original code and message.
+- Add stage-only Android logs without tokens, phone numbers, or verification payloads to diagnose SDK initialization and scene startup.
+
 ## 0.3.4
 
 - Android serializes `release` against SDK initialization while concurrent `launch` calls still return `busy` immediately. Activity/engine detachment can no longer advance the session generation between gate setup and SDK start, leaving the pending Flutter result unresolved.
