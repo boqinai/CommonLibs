@@ -18,8 +18,11 @@ import java.util.concurrent.locks.ReentrantLock
  *
  * [startSdk] and [destroySdk] run while [lifecycle] is held, so a concurrent
  * [release] waits until initialization finishes before it advances the
- * generation or tears the SDK down. Result callbacks run after that lock is
- * released. [launchOwner] stays claimed until [launch] returns, including
+ * generation or tears the SDK down. Initialization-failure and release
+ * callbacks run after that lock is released on their main-thread caller. SDK
+ * results delivered by resolve run on the resolving thread (possibly during
+ * initialization); callers must marshal UI/channel work themselves.
+ * [launchOwner] stays claimed until [launch] returns, including
  * while the `start_failed` callback runs, so a nested [launch] from that
  * callback returns "busy". Retry after [launch] returns.
  */
@@ -57,8 +60,10 @@ class FusionSceneController(
      * the new session and again if init throws. A null return means the SDK
      * call returned or init failed terminally.
      *
-     * Must run on the main thread. The result callback runs after the
-     * lifecycle lock is released and before this call returns.
+     * Must run on the main thread. Initialization-failure delivery runs after
+     * the lifecycle lock is released and before this call returns. A resolve
+     * callback may arrive concurrently on an SDK thread while initialization
+     * is still in progress.
      */
     fun launch(
         onResult: (FusionTerminal) -> Unit,
@@ -79,7 +84,7 @@ class FusionSceneController(
                 // Never re-arm a gate that an older SDK callback may still reference.
                 val gate = firstGate.getAndSet(null) ?: FusionStartGate()
                 gate.reset()
-                check(gate.arm())
+                if (!gate.arm()) return "busy"
                 attempt.set(Attempt(session, gate, onResult))
                 try {
                     startSdk(session)
@@ -120,6 +125,10 @@ class FusionSceneController(
         terminal?.send()
     }
 
+    /**
+     * Delivers on the calling thread, without acquiring the initialization lock.
+     * onResult must be thread-safe; FusionAuthPlugin.succeed posts to main.
+     */
     fun resolve(session: Long, token: String?, code: String, message: String) {
         // SDK callbacks must not wait for SDK initialization to release its lock:
         // some SDKs join the callback thread during initialization. Instead each

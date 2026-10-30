@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 fun main() {
     sdkInitThrowReturnsStartFailed()
+    sdkResultsRunOnTheResolvingThreadDuringInitialization()
     staleSessionCallbacksAreIgnored()
     retriesNeverRearmAnOldCallbackGate()
     concurrentLaunchesOnlyOwnerMutatesSession()
@@ -302,4 +303,27 @@ private fun retriesNeverRearmAnOldCallbackGate() {
     check(scene.hasPending())
     scene.resolve(newSession, "new-token", "ok", "")
     check(results.map { it.verifyToken } == listOf(null, "new-token"))
+}
+
+private fun sdkResultsRunOnTheResolvingThreadDuringInitialization() {
+    val scene = FusionSceneController()
+    val resolved = CountDownLatch(1)
+    val callbackThread = java.util.concurrent.atomic.AtomicReference<Thread?>()
+    var sdkThread: Thread? = null
+    var terminal: FusionTerminal? = null
+    scene.launch(
+        onResult = { terminal = it; callbackThread.set(Thread.currentThread()) },
+        destroySdk = {},
+        startSdk = { session ->
+            sdkThread = Thread {
+                scene.resolve(session, "authorized", "ok", "")
+                resolved.countDown()
+            }.also { it.start() }
+            check(resolved.await(5, TimeUnit.SECONDS)) { "SDK callback waited for initialization" }
+        },
+    )
+    sdkThread?.join(5_000)
+    check(terminal?.verifyToken == "authorized")
+    check(callbackThread.get() === sdkThread) { "resolve unexpectedly changed callback threads" }
+    check(!scene.hasPending())
 }

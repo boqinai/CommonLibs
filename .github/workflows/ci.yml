@@ -22,6 +22,8 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Verify fusion Flutter and CocoaPods version alignment
+        run: python3 ../tool/check_fusion_versions.py
       - name: Verify fusion_auth Git LFS binaries and minimums
         if: matrix.package == 'fusion_auth'
         run: |
