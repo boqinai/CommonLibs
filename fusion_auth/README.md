@@ -95,3 +95,9 @@ if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
 ```bash
 flutter analyze --fatal-infos && flutter test
 ```
+
+## 当前源码中的待发布修正
+
+初始 SDK token 鉴权最多等待 15 秒，超时返回 `sdk_auth_timeout` 并清理 SDK 以允许重试；鉴权成功后取消此看门狗，不限制用户阅读授权页的时间。取消与失败也清理计时器，旧代际的迟到回调不得打开或关闭新场景。Android 仅在 debuggable 宿主输出 `FusionAuth` 桥接日志。
+
+JVM 行为测试使用注入时钟验证 deadline、取消、重试和迟到回调，不依靠 grep 源码。`carrier_auth/example` 覆盖当前 checkout 的原生编译，iOS 编译由 macOS CI 执行。以上是未发布源码变更，不代表旧 `fusion_auth-v0.3.5` tag 已包含修复。

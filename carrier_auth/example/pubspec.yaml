@@ -1,0 +1,26 @@
+name: carrier_auth_example
+description: Standalone carrier authorization integration host.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  carrier_auth:
+    path: ..
+
+# CI exercises the source in this checkout, including the shared vendor bundle.
+dependency_overrides:
+  fusion_auth:
+    path: ../../fusion_auth
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

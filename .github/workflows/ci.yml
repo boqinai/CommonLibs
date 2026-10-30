@@ -42,6 +42,10 @@ jobs:
           grep -q 'minSdk = 24' android/build.gradle.kts
           grep -q ":ios, '15.0'" ios/fusion_auth.podspec
           unzip -p "$aar" AndroidManifest.xml | grep -q 'android:versionName="1.2.8"'
+      - name: Use checked-out SDK wrapper for carrier tests
+        if: matrix.package == 'carrier_auth'
+        run: |
+          printf 'dependency_overrides:\n  fusion_auth:\n    path: ../fusion_auth\n' > pubspec_overrides.yaml
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --fatal-infos
@@ -61,6 +65,35 @@ jobs:
           channel: stable
           cache: true
       - run: flutter build apk --debug
+
+  carrier-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: carrier_auth/example
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --fatal-infos
+      - run: flutter test
+      - if: runner.os == 'Linux'
+        run: flutter build apk --debug
+      - if: runner.os == 'macOS'
+        run: flutter build ios --simulator --debug
 
   go:
     runs-on: ubuntu-latest
@@ -152,6 +185,16 @@ jobs:
             fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionSceneStartGateTest.kt \
             -include-runtime -d /tmp/fusion-authenticated-start.jar
           java -jar /tmp/fusion-authenticated-start.jar
+      - name: Android fusion authentication deadline
+        run: |
+          set -eu
+          kotlinc \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionAuthWatchdog.kt \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionStartGate.kt \
+            fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionSceneController.kt \
+            fusion_auth/android/src/test/kotlin/com/boqinai/fusionauth/FusionAuthWatchdogTest.kt \
+            -include-runtime -d /tmp/fusion-auth-deadline.jar
+          java -jar /tmp/fusion-auth-deadline.jar
       - name: iOS fusion start_failed race
         run: |
           set -eu

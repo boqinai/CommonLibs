@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// CarrierEndpoint is the default PNVS endpoint for standalone GetMobile.
+const CarrierEndpoint = "https://dypnsapi.aliyuncs.com"
+
 // GetMobile exchanges the login token produced AFTER the SDK authorization
 // page's explicit user consent. Unlike VerifyWithFusionAuthToken, this is the
 // standalone carrier API and sends AccessToken, not VerifyToken.
@@ -15,7 +18,17 @@ func (c *Client) GetMobile(ctx context.Context, token string) (string, error) {
 		return "", ErrNotPassed
 	}
 	var out struct{ GetMobileResultDTO struct{ Mobile string } }
-	if err := c.Call(ctx, "GetMobile", map[string]string{"AccessToken": token}, &out); err != nil {
+	// Keep other methods' legacy endpoint behavior and avoid mutating a
+	// shared client while another goroutine performs SMS/fusion requests.
+	client := *c
+	if client.Endpoint == "" {
+		client.Endpoint = CarrierEndpoint
+	}
+	if err := client.Call(ctx, "GetMobile", map[string]string{"AccessToken": token}, &out); err != nil {
+		switch ErrorCode(err) {
+		case "isv.TOKEN_INVALID", "isv.TOKEN_UNAUTHORIZED_USED":
+			return "", errors.Join(ErrNotPassed, err)
+		}
 		return "", err
 	}
 	if out.GetMobileResultDTO.Mobile == "" {

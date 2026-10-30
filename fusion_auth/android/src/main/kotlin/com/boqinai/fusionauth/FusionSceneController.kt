@@ -24,14 +24,21 @@ import java.util.concurrent.locks.ReentrantLock
  * callback returns "busy". Retry after [launch] returns.
  */
 class FusionSceneController(
-    private val gate: FusionStartGate = FusionStartGate(),
+    gate: FusionStartGate = FusionStartGate(),
     private val isMainThread: () -> Boolean = { true },
 ) {
     private val generation = AtomicLong()
-    private val pending = AtomicReference<((FusionTerminal) -> Unit)?>(null)
+    private class Attempt(val id: Long, val gate: FusionStartGate, callback: (FusionTerminal) -> Unit) {
+        val pending = AtomicReference<((FusionTerminal) -> Unit)?>(callback)
+    }
+    private data class Delivery(val terminal: FusionTerminal, val callback: (FusionTerminal) -> Unit) {
+        fun send() = callback(terminal)
+    }
+    private val firstGate = AtomicReference<FusionStartGate?>(gate)
+    private val attempt = AtomicReference<Attempt?>(null)
 
     /**
-     * Launch ownership is independent of [pending] and [gate], so concurrent
+     * Launch ownership is independent of the pending callback and terminal gate, so concurrent
      * and same-thread reentrant launches return busy immediately. The lifecycle
      * lock also makes release wait for SDK initialization before it advances
      * the generation or tears down the SDK.
@@ -39,7 +46,7 @@ class FusionSceneController(
     private val launchOwner = AtomicReference<Any?>(null)
     private val lifecycle = ReentrantLock()
 
-    fun hasPending(): Boolean = pending.get() != null
+    fun hasPending(): Boolean = attempt.get()?.pending?.get() != null
 
     fun isCurrent(session: Long): Boolean = session == generation.get()
 
@@ -61,20 +68,19 @@ class FusionSceneController(
         assertMainThread()
         val claim = Any()
         if (!launchOwner.compareAndSet(null, claim)) return "busy"
-        var terminal: FusionTerminal? = null
+        var terminal: Delivery? = null
         try {
             lifecycle.lock()
             try {
-                if (pending.get() != null) return "busy"
+                if (hasPending()) return "busy"
                 destroySdk()
                 generation.incrementAndGet()
                 val session = generation.incrementAndGet()
+                // Never re-arm a gate that an older SDK callback may still reference.
+                val gate = firstGate.getAndSet(null) ?: FusionStartGate()
                 gate.reset()
-                if (!gate.arm() || !pending.compareAndSet(null, onResult)) {
-                    gate.reset()
-                    pending.compareAndSet(onResult, null)
-                    return "busy"
-                }
+                check(gate.arm())
+                attempt.set(Attempt(session, gate, onResult))
                 try {
                     startSdk(session)
                 } catch (error: Throwable) {
@@ -91,7 +97,7 @@ class FusionSceneController(
         } finally {
             val won = terminal
             try {
-                if (won != null) deliver(won)
+                won?.send()
             } finally {
                 launchOwner.compareAndSet(claim, null)
             }
@@ -111,26 +117,27 @@ class FusionSceneController(
         } finally {
             lifecycle.unlock()
         }
-        if (terminal != null) deliver(terminal)
+        terminal?.send()
     }
 
     fun resolve(session: Long, token: String?, code: String, message: String) {
-        if (!isCurrent(session)) return
-        val won = gate.complete(code, message, token) ?: return
-        deliver(won)
+        // SDK callbacks must not wait for SDK initialization to release its lock:
+        // some SDKs join the callback thread during initialization. Instead each
+        // generation owns an immutable gate/callback pair, never reset for retry.
+        val current = attempt.get() ?: return
+        if (current.id != session || !isCurrent(session)) return
+        val terminal = current.gate.complete(code, message, token) ?: return
+        current.pending.getAndSet(null)?.invoke(terminal)
     }
 
     /** Caller holds [lifecycle]. Does not invoke the result callback. */
-    private fun completeLocked(destroySdk: () -> Unit, code: String, message: String): FusionTerminal? {
-        val won = gate.complete(code, message, null)
+    private fun completeLocked(destroySdk: () -> Unit, code: String, message: String): Delivery? {
+        val current = attempt.get()
+        val terminal = current?.gate?.complete(code, message, null)
         generation.incrementAndGet()
+        val callback = if (terminal != null) current.pending.getAndSet(null) else null
         destroySdk()
-        return won
-    }
-
-    private fun deliver(terminal: FusionTerminal) {
-        val callback = pending.getAndSet(null) ?: return
-        callback(terminal)
+        return if (terminal != null && callback != null) Delivery(terminal, callback) else null
     }
 
     private fun assertMainThread() {

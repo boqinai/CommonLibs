@@ -23,8 +23,11 @@ import org.json.JSONObject
 class CarrierAuthPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler {
     private var activity: Activity? = null
     private lateinit var channel: MethodChannel
+    private var debugLogging = false
+    private fun debugInfo(message: String) { if (debugLogging) Log.i("CarrierAuth", message) }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        debugLogging = (binding.applicationContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         channel = MethodChannel(binding.binaryMessenger, "boqinai/carrier_auth")
         channel.setMethodCallHandler(this)
     }
@@ -35,7 +38,8 @@ class CarrierAuthPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCall
     }
     override fun onAttachedToActivity(binding: ActivityPluginBinding) { activity = binding.activity }
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) { activity = binding.activity }
-    override fun onDetachedFromActivityForConfigChanges() { finish("cancelled"); activity = null }
+    // A transient host recreation is not a user cancellation.
+    override fun onDetachedFromActivityForConfigChanges() { activity = null }
     override fun onDetachedFromActivity() { finish("cancelled"); activity = null }
 
     private val main = Handler(Looper.getMainLooper())
@@ -125,7 +129,7 @@ class CarrierAuthPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCall
             timeout = Runnable { if (request == generation) finish("600015") }.also {
                 main.postDelayed(it, authorizationTimeout)
             }
-            Log.i("CarrierAuth", "stage=opening_authorization")
+            debugInfo("stage=opening_authorization")
             sdk.getLoginToken(host, sdkTimeout)
         } catch (_: Exception) {
             finish("start_failed")
@@ -138,7 +142,7 @@ class CarrierAuthPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCall
             val json = try { JSONObject(raw) } catch (_: Exception) { finish("invalid_result"); return@post }
             val code = json.optString("code")
             // Only stable status codes are logged. Provider payloads contain credentials.
-            if (code.matches(Regex("[0-9]{1,12}"))) Log.i("CarrierAuth", "code=$code")
+            if (code.matches(Regex("[0-9]{1,12}"))) debugInfo("code=$code")
             if (code == "600012" || code == "600011") logFailure(json)
             when (code) {
                 "600001" -> Unit // Real masked number is now visible; await consent.
@@ -168,7 +172,7 @@ class CarrierAuthPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCall
                 .replace(Regex("[A-Za-z0-9+/=_-]{24,}"), "<redacted>")
                 .replace(Regex("[0-9]{7,}"), "<number>")
                 .replace(Regex("[\\r\\n]"), " ").take(160)
-            Log.i("CarrierAuth", "failure.$key=$safe")
+            debugInfo("failure.$key=$safe")
         }
     }
 

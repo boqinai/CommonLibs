@@ -30,7 +30,7 @@ SDK 密钥必须与平台、包名/Bundle ID、签名一致；它不是服务端
 
 ## Android
 
-Flutter 自动注册插件，宿主不再在 MainActivity 注册 Channel 或依赖 SDK Maven 坐标。Manifest 声明网络访问、网络状态、Wi-Fi 状态、网络切换四项普通权限；无需电话状态、广告标识或 Wi-Fi 修改权限。宿主 Application 主题需继承 AppCompat（SDK 使用 AppCompat Activity）。支持 AGP 9 内置 Kotlin。
+Flutter 自动注册插件，宿主不再在 MainActivity 注册 Channel 或手工声明 fusion_auth。Dart transitive dependency 会注册 fusion_auth 工程，其 implementation 是唯一 SDK 运行时来源；carrier_auth 对同一 AAR 使用 compileOnly，仅用于编译公开 API。旧的同坐标重复声明也会被 Gradle 去重，并不是两份不同 AAR。Manifest 声明网络访问、网络状态、Wi-Fi 状态、网络切换四项普通权限；无需电话状态、广告标识或 Wi-Fi 修改权限。宿主 Application 主题需继承 AppCompat（SDK 使用 AppCompat Activity）。支持 AGP 9 内置 Kotlin。
 
 ## iOS
 
@@ -52,4 +52,4 @@ flutter analyze --fatal-infos
 flutter test
 ```
 
-Android 原生编译可使用现有宿主（Penny）验证插件与权限合并；iOS 原生编译需 Mac。测试覆盖配置注入、成功/取消/切换短信、并发、超时、无效 token 和错误脱敏。桥接代码为 MIT；阿里云 SDK 适用其供应商条款。
+独立宿主在 `example/`，只直接声明 carrier_auth；CI 分别在 Linux 编译 Android APK、在 macOS 编译 iOS Simulator。配置变化时只暂时解绑 Activity，保留授权请求；永久分离和超时才关闭。Android 稳定状态日志及失败诊断仅在 debuggable 宿主输出。测试覆盖配置注入、成功/取消/切换短信、并发、超时、无效 token 和错误脱敏。桥接代码为 MIT；阿里云 SDK 适用其供应商条款。

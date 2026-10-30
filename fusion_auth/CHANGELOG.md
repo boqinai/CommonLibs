@@ -1,3 +1,10 @@
+## Unreleased
+
+- Bound initial SDK token authentication to 15 seconds on Android and iOS (`sdk_auth_timeout`); cancel the deadline after authentication and teardown.
+- Capture scene SDK/template per request and guard queued cleanup against newer generations.
+- Android bridge logs are generic and debug-only.
+- Replace source-grep assertions with executable watchdog/controller tests; native CI compiles the shared wrapper through carrier_auth/example.
+
 ## 0.3.5
 
 - Android waits for `onSDKTokenAuthSuccess` before posting `startSceneWithTemplateId` to the main thread. Duplicate token-auth success callbacks queue the scene only once, and cancellation before the posted action prevents a stale page from opening.

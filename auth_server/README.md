@@ -143,4 +143,6 @@ RAM 权限：短信需 `dypns:SendSmsVerifyCode`（使用阿里云生成的验�
 
 `aliyun.Client.GetMobile(ctx, token)` 交换独立 SDK 在用户授权页确认后返回的一次性 token，向 `GetMobile` 发送 `AccessToken`，不使用融合认证的 `VerifyToken`。返回空号码时为 `aliyun.ErrNotPassed`，上游错误保留 `APIError` 类型；空 token 在本地拒绝。`aliyun.CarrierVerifier` 将其适配为 `PhoneVerifier`，不创建账号或签发会话。
 
-宿主提供 SDK 方案配置、密钥、账号路由和 HTTP 错误映射；RAM 需要 `dypns:GetMobile` 权限，AccessKey 只放服务端。现有 SDK 默认 endpoint 保持兼容，当前号码认证应显式使用 `Endpoint: "https://dypnsapi.aliyuncs.com"`。正式接入应固定已发布的模块版本，或使用已推送提交对应的 Go 伪版本（无需打 Tag）；本地可用 Go replace 联调。
+宿主提供 SDK 方案配置、密钥、账号路由和 HTTP 错误映射；RAM 需要 `dypns:GetMobile` 权限，AccessKey 只放服务端。GetMobile 未指定 endpoint 时默认使用 `https://dypnsapi.aliyuncs.com`，显式 endpoint 仍保留；该方法复制客户端配置，不修改共享 Client 或其他方法的旧默认行为。正式接入应固定已发布的模块版本，或使用已推送提交对应的 Go 伪版本（无需打 Tag）；本地可用 Go replace 联调。
+
+GetMobile 将官方明确的 `isv.TOKEN_INVALID`、`isv.TOKEN_UNAUTHORIZED_USED` 标记为 `errors.Is(err, aliyun.ErrNotPassed)`，同时保留 `APIError` 供服务端排查。`CarrierVerifier` 将它们返回为不含上游详情的 `authserver.ErrVerificationFailed`。RAM 权限、方案、欠费和系统错误不归类成用户凭证错误；宿主仍需隐藏上游内部详情。错误码依据：[阿里云 API 返回码](https://help.aliyun.com/zh/pnvs/developer-reference/api-return-code)。

@@ -138,12 +138,13 @@
   self.closing = YES;
   self.generation++;
   [self.timer invalidate]; self.timer = nil;
+  __weak typeof(self) weakSelf = self;
   __block BOOL delivered = NO;
   void (^complete)(void) = ^{
     dispatch_async(dispatch_get_main_queue(), ^{
       if (delivered) return;
       delivered = YES;
-      self.closing = NO;
+      weakSelf.closing = NO;
       reply(token.length ? @{@"code":code, @"token":token} : @{@"code":code});
     });
   };

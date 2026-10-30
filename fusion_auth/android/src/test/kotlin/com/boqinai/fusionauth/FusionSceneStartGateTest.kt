@@ -1,6 +1,5 @@
 package com.boqinai.fusionauth
 
-import java.io.File
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
@@ -27,7 +26,6 @@ fun main() {
     stale.authenticated({ false }, { queue.add(it) }, { started++ })
     check(queue.isEmpty())
     concurrentAuthenticationQueuesOnce()
-    pluginStartsOnlyFromAuthenticatedCallback()
     println("fusion authenticated scene start ok")
 }
 
@@ -52,15 +50,4 @@ private fun concurrentAuthenticationQueuesOnce() {
     check(queued.size == 1) { "queued ${queued.size} starts" }
     queued.single()()
     check(starts.get() == 1)
-}
-
-private fun pluginStartsOnlyFromAuthenticatedCallback() {
-    val source = File(
-        "fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionAuthPlugin.kt",
-    ).readText()
-    check(source.contains("override fun onSDKTokenAuthSuccess()"))
-    check(source.contains("sceneStart.authenticated("))
-    check(source.windowed("startSceneWithTemplateId".length)
-        .count { it == "startSceneWithTemplateId" } == 1)
-    check(source.contains("resolve(session, null, event.code(), event.msg())"))
 }

@@ -1,5 +1,7 @@
 ## Unreleased
 
+- GetMobile defaults to the standalone endpoint without mutating shared configuration; classify only explicit invalid-token errors as verification rejections while preserving operational failures.
+
 - Add standalone `aliyun.Client.GetMobile` and `aliyun.CarrierVerifier`; SDK authorization tokens stay distinct from fusion verify tokens. No app configuration or account/session policy is included.
 
 ## 0.15.1

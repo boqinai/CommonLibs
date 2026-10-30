@@ -19,6 +19,7 @@
 @property(nonatomic, copy) NSString *templateId;
 @property(nonatomic, copy) NSString *authToken;
 @property(nonatomic, assign) BOOL sceneStarted;
+@property(nonatomic, strong) NSTimer *tokenAuthTimer;
 @property(nonatomic, strong) FlutterMethodChannel *channel;
 @property(nonatomic, assign) FusionStartGate *gate;
 @property(nonatomic, assign) FusionSession *session;
@@ -40,6 +41,7 @@
 }
 
 - (void)dealloc {
+  [_tokenAuthTimer invalidate];
   FusionStartGateDestroy(_gate);
   FusionSessionDestroy(_session);
   _gate = NULL;
@@ -106,6 +108,13 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
   }
   self.handlerGeneration = FusionSessionBegin(self.session);
   self.pending = result;
+  uint64_t tokenAuthGeneration = self.handlerGeneration;
+  __weak typeof(self) weakSelf = self;
+  self.tokenAuthTimer = [NSTimer scheduledTimerWithTimeInterval:15 repeats:NO block:^(NSTimer *timer) {
+    typeof(self) self = weakSelf;
+    if (!self || !FusionSessionIsCurrent(self.session, tokenAuthGeneration) || !self.pending || self.sceneStarted) return;
+    [self releaseSceneWithCode:@"sdk_auth_timeout" message:@"SDK token authentication timed out"];
+  }];
   self.templateId = template;
   self.authToken = token;
   self.sceneStarted = NO;
@@ -192,6 +201,8 @@ static NSString *PFString(id v) { return [v isKindOfClass:[NSString class]] ? v 
 }
 
 - (void)destroySDK {
+  [self.tokenAuthTimer invalidate];
+  self.tokenAuthTimer = nil;
   AlicomFusionAuthHandler *h = self.handler;
   self.handler = nil;
   self.halfway = nil;
@@ -263,6 +274,8 @@ static NSString *PFMsg(AlicomFusionEvent *e) { return e.resultMsg ?: @""; }
         self.sceneStarted) {
       return;
     }
+    [self.tokenAuthTimer invalidate];
+    self.tokenAuthTimer = nil;
     UIViewController *vc = [self topViewController];
     if (vc == nil) {
       [self resolve:nil code:@"no_activity" message:@"No foreground view controller"];

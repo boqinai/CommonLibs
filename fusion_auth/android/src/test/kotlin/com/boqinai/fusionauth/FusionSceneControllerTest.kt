@@ -1,6 +1,5 @@
 package com.boqinai.fusionauth
 
-import java.io.File
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -9,7 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger
 fun main() {
     sdkInitThrowReturnsStartFailed()
     staleSessionCallbacksAreIgnored()
-    pluginLaunchesThroughController()
+    retriesNeverRearmAnOldCallbackGate()
     concurrentLaunchesOnlyOwnerMutatesSession()
     releaseWaitsForLaunchInitialization()
     failureCallbackIsOutsideLockAndRetryIsBusy()
@@ -55,15 +54,7 @@ private fun staleSessionCallbacksAreIgnored() {
     check(deliveries == 1)
 }
 
-private fun pluginLaunchesThroughController() {
-    val src = File("fusion_auth/android/src/main/kotlin/com/boqinai/fusionauth/FusionAuthPlugin.kt").readText()
-    check(src.contains("FusionSceneController"))
-    check(src.contains("scene.launch"))
-    check(src.contains("scene.isCurrent"))
-    check(src.contains("isMainThread"))
-    check(src.contains("Looper.myLooper() == Looper.getMainLooper()"))
-    check(!src.contains("sessionGeneration"))
-}
+
 
 /**
  * Several launches at once: one owns the attempt. The others return busy
@@ -295,4 +286,20 @@ private fun catchMainThread(body: () -> Unit): IllegalStateException? {
         return error
     }
     return null
+}
+
+private fun retriesNeverRearmAnOldCallbackGate() {
+    val originalGate = FusionStartGate()
+    val scene = FusionSceneController(originalGate)
+    var oldSession = 0L
+    val results = mutableListOf<FusionTerminal>()
+    scene.launch(results::add, {}) { oldSession = it }
+    scene.release({}, "cancelled", "")
+    var newSession = 0L
+    scene.launch(results::add, {}) { newSession = it }
+    check(originalGate.current()?.code == "cancelled") { "Retry reset a gate still referenced by the old SDK" }
+    scene.resolve(oldSession, "old-token", "ok", "")
+    check(scene.hasPending())
+    scene.resolve(newSession, "new-token", "ok", "")
+    check(results.map { it.verifyToken } == listOf(null, "new-token"))
 }

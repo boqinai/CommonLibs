@@ -16,8 +16,9 @@ android {
     defaultConfig { minSdk = 24 }
 }
 dependencies {
-    // Shared dependency is resolved once, including its native resources.
+    // fusion_auth owns the only runtime SDK dependency and native resources.
     implementation(project(":fusion_auth"))
-    implementation("com.alicom.fusion:fusionauth:1.2.16@aar")
+    // Compile against the same API without declaring a second runtime owner.
+    compileOnly("com.alicom.fusion:fusionauth:1.2.16@aar")
     implementation("androidx.appcompat:appcompat:1.7.1")
 }
