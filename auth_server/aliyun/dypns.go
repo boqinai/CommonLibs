@@ -31,7 +31,7 @@ const (
 	APIVersion      = "2017-05-25"
 )
 
-// ErrNotPassed means the fusion verify token did not yield a verified number.
+// ErrNotPassed means a carrier or fusion token did not yield a verified number.
 var ErrNotPassed = errors.New("aliyun: verification not passed")
 
 // Client signs dypns RPC requests (signature v1, HMAC-SHA1).

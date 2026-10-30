@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [app_update, auth_client, fusion_auth]
+        package: [app_update, auth_client, fusion_auth, carrier_auth]
     defaults:
       run:
         working-directory: ${{ matrix.package }}

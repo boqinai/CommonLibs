@@ -1,3 +1,7 @@
+## Unreleased
+
+- Add standalone `aliyun.Client.GetMobile` and `aliyun.CarrierVerifier`; SDK authorization tokens stay distinct from fusion verify tokens. No app configuration or account/session policy is included.
+
 ## 0.15.1
 
 - `ParseTrustedProxies` normalizes IPv4-mapped IPv6 CIDRs such as `::ffff:10.0.0.0/104` to their IPv4 equivalent (`10.0.0.0/8`). The prefix is masked, so a non-aligned form such as `::ffff:10.1.2.3/104` is `10.0.0.0/8` and `::ffff:10.1.2.3/128` is the host `10.1.2.3/32`. Mapped prefixes shorter than `/96` are rejected because they cannot be represented as an IPv4 network after XFF address canonicalization.

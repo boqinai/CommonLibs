@@ -138,3 +138,9 @@ auth := authserver.New(db, secret, authserver.WithTrustedProxies(prefixes...))
 `SMSSender` 用 `SendSmsVerifyCode` 下发显式验证码（`TemplateParam {"code","min"}`），适配控制台“赠送签名/赠送模板”（模板变量 `${code}`、`${min}`），因此无需调用 `CheckSmsVerifyCode`。阿里云的 `FREQUENCY_FAIL`、`BUSINESS_LIMIT_CONTROL`、`MOBILE_NUMBER_ILLEGAL` 分别映射为 `ErrTooFrequent`、`ErrDailyLimit`、`ErrInvalidPhone`。
 
 RAM 权限：短信需 `dypns:SendSmsVerifyCode`（使用阿里云生成的验证码时再加 `dypns:CheckSmsVerifyCode`）；一键登录需 `dypns:GetFusionAuthToken`、`dypns:VerifyWithFusionAuthToken`。
+
+## 独立运营商号码认证（未发布）
+
+`aliyun.Client.GetMobile(ctx, token)` 交换独立 SDK 在用户授权页确认后返回的一次性 token，向 `GetMobile` 发送 `AccessToken`，不使用融合认证的 `VerifyToken`。返回空号码时为 `aliyun.ErrNotPassed`，上游错误保留 `APIError` 类型；空 token 在本地拒绝。`aliyun.CarrierVerifier` 将其适配为 `PhoneVerifier`，不创建账号或签发会话。
+
+宿主提供 SDK 方案配置、密钥、账号路由和 HTTP 错误映射；RAM 需要 `dypns:GetMobile` 权限，AccessKey 只放服务端。现有 SDK 默认 endpoint 保持兼容，当前号码认证应显式使用 `Endpoint: "https://dypnsapi.aliyuncs.com"`。正式接入应固定已发布的模块版本，或使用已推送提交对应的 Go 伪版本（无需打 Tag）；本地可用 Go replace 联调。

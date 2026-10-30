@@ -5,6 +5,7 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 | 模块 | 用途 |
 | --- | --- |
 | `app_update` | Flutter Android 更新检查、前台服务下载和安装 |
+| `carrier_auth` | Flutter 独立运营商号码认证插件，Android/iOS（未发布） |
 | `fusion_auth` | Flutter 阿里云融合认证（本机号码一键登录）插件，Android/iOS |
 | `auth_client` | Flutter 注册、登录、短信验证码/一键登录、Bearer 请求和安全 Token 存储 |
 | `auth_server` | Go/SQLite 注册、登录、短信验证码/一键登录、JWT、限流和认证中间件 |
@@ -18,6 +19,7 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 | --- | --- | --- |
 | `auth_server` | 斜杠 | `auth_server/v0.15.1` |
 | `auth_client` | 连字符 | `auth_client-v0.16.0` |
+| `carrier_auth` | 连字符 | `carrier_auth-v0.1.0`（待发布） |
 | `fusion_auth` | 连字符 | `fusion_auth-v0.3.5` |
 | `app_update` | 连字符 | `app_update-v0.10.2` |
 | `release_tool` | 连字符 | `release_tool-v0.5.0` |
@@ -41,6 +43,7 @@ git lfs pull
 (cd app_update && flutter analyze --fatal-infos && flutter test)
 (cd auth_client && flutter analyze --fatal-infos && flutter test)
 (cd fusion_auth && flutter analyze --fatal-infos && flutter test)
+(cd carrier_auth && flutter analyze --fatal-infos && flutter test)
 (cd auth_server && go vet ./... && go test -race ./...)
 (cd release_tool && python -m unittest discover -v)
 ```
