@@ -1,6 +1,7 @@
 """Fail CI when the Flutter ref and CocoaPods version constraints diverge."""
-from pathlib import Path
+
 import re
+from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 checks = {
@@ -16,5 +17,7 @@ for name, pattern in checks.items():
         raise SystemExit("Missing fusion version in " + name)
     versions[name] = match.group(1)
 if len(set(versions.values())) != 1:
-    raise SystemExit("Fusion package, Git ref and pod versions disagree: " + str(versions))
+    raise SystemExit(
+        "Fusion package, Git ref and pod versions disagree: " + str(versions)
+    )
 print("Fusion dependency versions match: " + next(iter(versions.values())))

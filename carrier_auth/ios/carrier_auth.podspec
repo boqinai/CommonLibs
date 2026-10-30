@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.public_header_files = 'Classes/CarrierAuthPlugin.h'
   s.dependency 'Flutter'
   # The framework already embeds the documented standalone carrier SDK.
-  s.dependency 'fusion_auth', '0.3.5'
+  s.dependency 'fusion_auth', '0.3.6'
   s.frameworks = 'UIKit'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
 end

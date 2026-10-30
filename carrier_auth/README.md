@@ -38,9 +38,9 @@ Flutter 自动注册 `CarrierAuthPlugin`，不在 AppDelegate 手工注册；依
 
 ## SDK 二进制与版本
 
-0.1.0 尚未发布。当前依赖固定的 `fusion_auth-v0.3.5` 作为供应商二进制载体（号码认证 SDK 2.14.21），不调用其融合入口，不执行融合模板或图形验证码。这样不复制受 Git LFS 管理的大二进制，也不在同一个 App 重复链接 SDK；以后替换成独立 vendor 包时需一次性移除旧载体。开发环境需要 Git LFS 和 CommonLibs 仓库读取权限。
+当前依赖固定的 `fusion_auth-v0.3.6` 作为供应商二进制载体（号码认证 SDK 2.14.21），不调用其融合入口，不执行融合模板或图形验证码。这样不复制受 Git LFS 管理的大二进制，也不在同一个 App 重复链接 SDK；以后替换成独立 vendor 包时需一次性移除旧载体。开发环境需要 Git LFS 和 CommonLibs 仓库读取权限。
 
-CommonLibs 打版本 Tag 后以 `carrier_auth-vX.Y.Z` 固定引用；不打 Tag 时也可将 Flutter Git 依赖固定到已推送的完整提交 SHA。服务端 `aliyun.Client.GetMobile` / `CarrierVerifier` 是 auth_server 的独立变更，Go 可引用该提交解析出的伪版本。本地联调也可用同级路径；不要引用不存在的远程 Tag。
+以 `carrier_auth-vX.Y.Z`（首个版本 `carrier_auth-v0.1.0`）固定引用。服务端 `aliyun.Client.GetMobile` / `CarrierVerifier` 自 `auth_server/v0.16.0` 起提供。本地联调也可用同级路径；不要引用不存在的远程 Tag。
 
 双卡使用默认数据卡。网络/运营商预取号失败由宿主给出提示，插件不会关闭 Wi-Fi、改 APN、切数据卡、绕过授权或自动降级发短信。
 

@@ -1,8 +1,10 @@
-## Unreleased
+## 0.3.6
 
 - Bound initial SDK token authentication to 15 seconds on Android and iOS (`sdk_auth_timeout`); cancel the deadline after authentication and teardown.
 - Capture scene SDK/template per request and guard queued cleanup against newer generations.
 - Android bridge logs are generic and debug-only.
+- Document callback threads: release/start_failed deliver on the main-thread caller, resolve on the SDK thread. `launch` returns `busy` instead of throwing if the start gate cannot be armed.
+- Document `sdk_auth_timeout` and other result codes with generic host handling.
 - Replace source-grep assertions with executable watchdog/controller tests; native CI compiles the shared wrapper through carrier_auth/example.
 
 ## 0.3.5

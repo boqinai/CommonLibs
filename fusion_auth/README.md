@@ -8,7 +8,7 @@
 
 | 名称 | 版本 |
 | --- | --- |
-| Flutter 包 / Tag | **0.3.5**（`fusion_auth-v0.3.5`，`pubspec.yaml` 的 `version`） |
+| Flutter 包 / Tag | **0.3.6**（`fusion_auth-v0.3.6`，`pubspec.yaml` 的 `version`） |
 | Android 发布标签 | Maven `com.alicom.fusion:fusionauth:1.2.16`，文件 `fusionauth-1.2.16.aar` |
 | AAR 内部 `android:versionName` | **1.2.8**（清单里的旧构建号；判断 SDK 时以文件名和 Maven 坐标 1.2.16 为准） |
 | iOS 发布标签 | AlicomFusionAuth.xcframework **1.2.15** |
@@ -47,7 +47,7 @@ dependencies:
   fusion_auth:
     git:
       url: https://github.com/boqinai/CommonLibs.git
-      ref: fusion_auth-v0.3.5
+      ref: fusion_auth-v0.3.6
       path: fusion_auth
 ```
 
@@ -103,13 +103,13 @@ if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
 | `PlatformException` | `bad_args` / `no_activity` | 缺少参数或没有前台宿主，修正配置或等待页面就绪。 |
 | SDK 结果 | 供应商 code | 只有非空 verifyToken 才继续服务端校验；按供应商 code 映射友好提示，不直接展示原始 message。 |
 
-`result.ok == false` 时，宿主应先处理取消、超时和失败，不能仅忽略结果。Penny 已使用独立号码认证入口（常规超时码 `600015`），其适配层也兼容 `sdk_auth_timeout` 并显示相同的超时提示，不会重新启用融合流程。
+`result.ok == false` 时，宿主应先处理取消、超时和失败，不能仅忽略结果。收到 `sdk_auth_timeout` 时，宿主应结束本次登录的加载状态，提示“登录超时，请重试”，并提供重试或改用短信验证码的入口；不要自动重复发起，也不要把它当成用户取消。若宿主同时接入独立号码认证（其超时码为 `600015`），可将两者映射到同一条超时提示。
 
 ## 发布联动检查
 
-以后获得授权发布 `fusion_auth-v0.3.6` 时，同时更新 `fusion_auth/pubspec.yaml`、iOS podspec，以及 `carrier_auth/pubspec.yaml` 的 Git ref 和 `carrier_auth/ios/carrier_auth.podspec` 的原生版本约束，再解析依赖并验证。旧 tag 不会自动包含这些改动；新 tag 创建前不把依赖改成不存在的版本。
+发布新的 `fusion_auth-vX.Y.Z` 时，同时更新 `fusion_auth/pubspec.yaml`、iOS podspec，以及 `carrier_auth/pubspec.yaml` 的 Git ref 和 `carrier_auth/ios/carrier_auth.podspec` 的原生版本约束，再解析依赖并验证。旧 tag 不会自动包含这些改动；新 tag 创建前不把依赖改成不存在的版本。
 
-版本一致性检查：`python tool/check_fusion_versions.py`。本轮不创建 tag，也不提前改写当前 0.3.5 的依赖。
+版本一致性检查：`python tool/check_fusion_versions.py`（CI 的 python 任务会执行）。
 
 ## 验证
 
@@ -117,8 +117,8 @@ if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
 flutter analyze --fatal-infos && flutter test
 ```
 
-## 当前源码中的待发布修正
+## 0.3.6 修正
 
 初始 SDK token 鉴权最多等待 15 秒，超时返回 `sdk_auth_timeout` 并清理 SDK 以允许重试；鉴权成功后取消此看门狗，不限制用户阅读授权页的时间。取消与失败也清理计时器，旧代际的迟到回调不得打开或关闭新场景。Android 仅在 debuggable 宿主输出 `FusionAuth` 桥接日志。
 
-JVM 行为测试使用注入时钟验证 deadline、取消、重试和迟到回调，不依靠 grep 源码。`carrier_auth/example` 覆盖当前 checkout 的原生编译，iOS 编译由 macOS CI 执行。以上是未发布源码变更，不代表旧 `fusion_auth-v0.3.5` tag 已包含修复。
+JVM 行为测试使用注入时钟验证 deadline、取消、重试和迟到回调，不依靠 grep 源码。`carrier_auth/example` 覆盖当前 checkout 的原生编译，iOS 编译由 macOS CI 执行。以上修正自 `fusion_auth-v0.3.6` 起包含，旧 tag 不含。

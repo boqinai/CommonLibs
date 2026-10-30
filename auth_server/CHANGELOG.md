@@ -1,4 +1,4 @@
-## Unreleased
+## 0.16.0
 
 - GetMobile defaults to the standalone endpoint without mutating shared configuration; classify only explicit invalid-token errors as verification rejections while preserving operational failures.
 
