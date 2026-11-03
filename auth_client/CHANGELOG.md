@@ -1,3 +1,7 @@
+## 0.16.1
+
+- Upgrade `flutter_secure_storage` from 10.3.1 to 11.2.0. Consumers must meet its Android API 24 minimum; this repository's supported Flutter version already does.
+
 ## 0.16.0
 
 - `logout` always POSTs `/logout` when an access or refresh token is present. Local session cleanup still happens if that call fails. The `revokeOnLogout` flag is gone.
