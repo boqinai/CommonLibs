@@ -1,13 +1,8 @@
 group = "com.boqinai.app_update"
-version = "0.10.2"
+version = "0.11.0"
 
 plugins {
     id("com.android.library")
-}
-
-val agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.substringBefore('.').toInt()
-if (agpMajor < 9) {
-    apply(plugin = "org.jetbrains.kotlin.android")
 }
 
 android {
@@ -19,7 +14,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets.getByName("main").java.srcDirs("src/main/kotlin")
     defaultConfig { minSdk = 21 }
 }
 

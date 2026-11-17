@@ -1,3 +1,9 @@
+## 0.11.0
+
+- Support Flutter 3.50's Android toolchain defaults (AGP 9.3.1 and Gradle 9.5), remove the plugin's legacy KGP fallback, and validate AGP's built-in Kotlin and new DSL paths.
+- **Breaking:** migrate the default update dialog from deprecated `package:flutter/material.dart` types to `package:material_ui` 1.11.1 and require Flutter 3.47/Dart 3.13.
+- Upgrade `shared_preferences` to 2.5.6.
+
 ## 0.10.2
 
 - The download commit renames the previous APK to `.bak` before publishing the new file. If a timeout wins during that swap, rollback restores the backup and deletes only the staged `.ready` file, so an installable APK remains.

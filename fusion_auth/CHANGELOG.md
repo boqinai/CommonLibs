@@ -1,3 +1,7 @@
+## 0.3.7
+
+- Declare the Flutter 3.44/Dart 3.12 minimum required by the plugin's built-in Kotlin-compatible Gradle configuration and validate it with Flutter 3.50.
+
 ## 0.3.6
 
 - Bound initial SDK token authentication to 15 seconds on Android and iOS (`sdk_auth_timeout`); cancel the deadline after authentication and teardown.

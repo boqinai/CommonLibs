@@ -1,3 +1,8 @@
+## 0.1.1
+
+- Declare the Flutter 3.44/Dart 3.12 minimum required by the plugin's built-in Kotlin-compatible Gradle configuration, refresh the example to Flutter 3.50's Android toolchain defaults, and validate AGP's built-in Kotlin and new DSL paths.
+- Migrate the example app from the deprecated framework Material library to `material_ui` 1.11.1.
+
 ## 0.1.0
 
 - Extract standalone Android/iOS carrier authorization, lifecycle cleanup, timeout and concurrency handling.

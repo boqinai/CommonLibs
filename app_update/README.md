@@ -17,7 +17,7 @@ dependencies:
   app_update:
     git:
       url: https://github.com/boqinai/CommonLibs.git
-      ref: app_update-v0.10.2
+      ref: app_update-v0.11.0
       path: app_update
 ```
 

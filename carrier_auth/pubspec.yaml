@@ -1,11 +1,11 @@
 name: carrier_auth
 description: Standalone Aliyun carrier authorization for Flutter Android and iOS.
-version: 0.1.0
+version: 0.1.1
 publish_to: none
 
 environment:
-  sdk: '>=3.9.0 <4.0.0'
-  flutter: '>=3.35.0'
+  sdk: '>=3.12.0 <4.0.0'
+  flutter: '>=3.44.0'
 
 dependencies:
   flutter:
@@ -14,7 +14,7 @@ dependencies:
   fusion_auth:
     git:
       url: https://github.com/boqinai/CommonLibs.git
-      ref: fusion_auth-v0.3.6
+      ref: fusion_auth-v0.3.7
       path: fusion_auth
 
 dev_dependencies:

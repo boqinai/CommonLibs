@@ -19,9 +19,9 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 | --- | --- | --- |
 | `auth_server` | 斜杠 | `auth_server/v0.16.0` |
 | `auth_client` | 连字符 | `auth_client-v0.16.1` |
-| `carrier_auth` | 连字符 | `carrier_auth-v0.1.0` |
-| `fusion_auth` | 连字符 | `fusion_auth-v0.3.6` |
-| `app_update` | 连字符 | `app_update-v0.10.2` |
+| `carrier_auth` | 连字符 | `carrier_auth-v0.1.1` |
+| `fusion_auth` | 连字符 | `fusion_auth-v0.3.7` |
+| `app_update` | 连字符 | `app_update-v0.11.0` |
 | `release_tool` | 连字符 | `release_tool-v0.5.0` |
 
 Go 模块用斜杠 Tag（`go get ...@auth_server/vX.Y.Z`）；Flutter 包用连字符 Tag（pub `ref:`）。

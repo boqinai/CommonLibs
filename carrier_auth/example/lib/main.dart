@@ -1,6 +1,7 @@
 import 'dart:async';
+
 import 'package:carrier_auth/carrier_auth.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 void main() => runApp(const CarrierExampleApp());
 

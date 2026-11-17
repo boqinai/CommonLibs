@@ -74,6 +74,9 @@ class AppUpdateService {
     http.Client? client,
     UpdateRequestContextLoader? requestContextLoader,
   }) : _client = client ?? http.Client(),
+       // Keep the public constructor parameter name; an initializing formal
+       // would expose the private field name instead.
+       // ignore: prefer_initializing_formals
        _requestContextLoader = requestContextLoader;
 
   static const _platform = MethodChannel('app_update');
