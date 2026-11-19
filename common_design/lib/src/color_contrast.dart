@@ -4,11 +4,16 @@ import 'dart:ui';
 abstract final class ColorContrast {
   /// WCAG contrast ratio, ranging from 1 to 21.
   ///
-  /// Both colors must be opaque. Alpha colors need to be composited onto their
-  /// rendered background before they can be measured accurately.
+  /// Both colors must be opaque and use the sRGB color space. Alpha colors
+  /// need to be composited onto their rendered background before they can be
+  /// measured accurately.
   static double ratio(Color foreground, Color background) {
     if (foreground.a != 1 || background.a != 1) {
       throw ArgumentError('Contrast colors must be opaque.');
+    }
+    if (foreground.colorSpace != ColorSpace.sRGB ||
+        background.colorSpace != ColorSpace.sRGB) {
+      throw ArgumentError('Contrast colors must use the sRGB color space.');
     }
     final foregroundLuminance = foreground.computeLuminance();
     final backgroundLuminance = background.computeLuminance();

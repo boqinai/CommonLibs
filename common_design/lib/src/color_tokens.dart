@@ -47,9 +47,19 @@ final class CommonColorTokens {
 }
 
 final class BrandColors {
-  const BrandColors({required this.base});
+  const BrandColors({
+    required this.base,
+    required this.onBase,
+  });
 
+  /// Brand fill or logo color, not a general-purpose foreground color.
+  ///
+  /// Use [ActionColors.primary] for brand-colored text and icons on dark
+  /// surfaces.
   final Color base;
+
+  /// Text or icon color displayed on [base].
+  final Color onBase;
 }
 
 final class ActionColors {
@@ -158,7 +168,10 @@ final class OverlayColors {
 abstract final class CommonColors {
   static const light = CommonColorTokens(
     brightness: Brightness.light,
-    brand: BrandColors(base: Color(0xFF3563E9)),
+    brand: BrandColors(
+      base: Color(0xFF3563E9),
+      onBase: Color(0xFFFFFFFF),
+    ),
     action: ActionColors(
       primary: Color(0xFF3563E9),
       onPrimary: Color(0xFFFFFFFF),
@@ -190,12 +203,15 @@ abstract final class CommonColors {
       dangerFill: Color(0xFFB34538),
       onDangerFill: Color(0xFFFFFFFF),
     ),
-    overlay: OverlayColors(scrim: Color(0x66000000), shadow: Color(0xFF000000)),
+    overlay: OverlayColors(scrim: Color(0x66000000), shadow: Color(0x1F14234C)),
   );
 
   static const dark = CommonColorTokens(
     brightness: Brightness.dark,
-    brand: BrandColors(base: Color(0xFF3563E9)),
+    brand: BrandColors(
+      base: Color(0xFF3563E9),
+      onBase: Color(0xFFFFFFFF),
+    ),
     action: ActionColors(
       primary: Color(0xFFA6BDFF),
       onPrimary: Color(0xFF14234C),
@@ -227,7 +243,7 @@ abstract final class CommonColors {
       dangerFill: Color(0xFFFFAAA1),
       onDangerFill: Color(0xFF3A1510),
     ),
-    overlay: OverlayColors(scrim: Color(0x99000000), shadow: Color(0xFF000000)),
+    overlay: OverlayColors(scrim: Color(0x99000000), shadow: Color(0x52000000)),
   );
 
   static CommonColorTokens resolve(Brightness brightness) =>

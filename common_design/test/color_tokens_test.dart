@@ -25,6 +25,15 @@ void main() {
     },
   );
 
+  test('brand fills provide readable content', () {
+    for (final colors in [CommonColors.light, CommonColors.dark]) {
+      expect(
+        ColorContrast.meetsText(colors.brand.onBase, colors.brand.base),
+        isTrue,
+      );
+    }
+  });
+
   test('all required text pairs meet the 4.5 ratio', () {
     for (final colors in [CommonColors.light, CommonColors.dark]) {
       final pairs = <(Color, Color)>[
@@ -45,6 +54,8 @@ void main() {
         colors.surface.canvas,
         colors.surface.card,
         colors.surface.subtle,
+        colors.surface.backgroundSubtle,
+        colors.surface.raised,
       ];
       final surfaceForegrounds = [
         colors.text.primary,
@@ -62,12 +73,41 @@ void main() {
     }
   });
 
-  test('control borders meet 3:1 on shared surfaces', () {
+  test('computes known WCAG ratios symmetrically', () {
+    const black = Color(0xFF000000);
+    const white = Color(0xFFFFFFFF);
+    const primary = Color(0xFF3563E9);
+
+    expect(ColorContrast.ratio(black, white), closeTo(21, 1e-12));
+    expect(ColorContrast.ratio(white, black), closeTo(21, 1e-12));
+    expect(ColorContrast.ratio(primary, primary), closeTo(1, 1e-12));
+    expect(
+      ColorContrast.ratio(primary, white),
+      closeTo(5.10607094096039, 1e-12),
+    );
+  });
+
+  test('enforces the documented contrast thresholds', () {
+    const white = Color(0xFFFFFFFF);
+
+    expect(ColorContrast.meetsText(const Color(0xFF767676), white), isTrue);
+    expect(ColorContrast.meetsText(const Color(0xFF777777), white), isFalse);
+    expect(ColorContrast.meetsNonText(const Color(0xFF949494), white), isTrue);
+    expect(ColorContrast.meetsNonText(const Color(0xFF959595), white), isFalse);
+  });
+
+  test('control borders meet 3:1 on shared surfaces and soft actions', () {
     for (final colors in [CommonColors.light, CommonColors.dark]) {
+      expect(
+        ColorContrast.meetsNonText(colors.border.control, colors.action.soft),
+        isTrue,
+      );
       for (final surface in [
         colors.surface.canvas,
         colors.surface.card,
         colors.surface.subtle,
+        colors.surface.backgroundSubtle,
+        colors.surface.raised,
       ]) {
         expect(
           ColorContrast.meetsNonText(colors.border.control, surface),
@@ -77,13 +117,41 @@ void main() {
     }
   });
 
+  test('uses translucent default shadows', () {
+    expect(CommonColors.light.overlay.shadow, const Color(0x1F14234C));
+    expect(CommonColors.dark.overlay.shadow, const Color(0x52000000));
+  });
+
   test('rejects alpha colors that have not been composited', () {
-    expect(
-      () => ColorContrast.ratio(
-        CommonColors.light.overlay.scrim,
-        CommonColors.light.surface.canvas,
+    const opaque = Color(0xFFFFFFFF);
+    final translucent = CommonColors.light.overlay.scrim;
+
+    expect(() => ColorContrast.ratio(translucent, opaque), throwsArgumentError);
+    expect(() => ColorContrast.ratio(opaque, translucent), throwsArgumentError);
+  });
+
+  test('rejects non-sRGB colors in either position', () {
+    const opaque = Color(0xFFFFFFFF);
+    const wideGamutColors = [
+      Color.from(
+        alpha: 1,
+        red: 1,
+        green: 0,
+        blue: 0,
+        colorSpace: ColorSpace.displayP3,
       ),
-      throwsArgumentError,
-    );
+      Color.from(
+        alpha: 1,
+        red: 1,
+        green: 0,
+        blue: 0,
+        colorSpace: ColorSpace.extendedSRGB,
+      ),
+    ];
+
+    for (final color in wideGamutColors) {
+      expect(() => ColorContrast.ratio(color, opaque), throwsArgumentError);
+      expect(() => ColorContrast.ratio(opaque, color), throwsArgumentError);
+    }
   });
 }
