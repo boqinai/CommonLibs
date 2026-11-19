@@ -1,0 +1,62 @@
+/* common_design 0.2.0 — generated semantic color contract. */
+:root {
+  --common-brand-base: #3563E9;
+  --common-brand-on-base: #FFFFFF;
+  --common-action-primary: #3563E9;
+  --common-action-on-primary: #FFFFFF;
+  --common-action-hover: #2E57D4;
+  --common-action-pressed: #264BC1;
+  --common-action-soft: #EAF0FF;
+  --common-action-on-soft: #264BC1;
+  --common-surface-canvas: #F5F8FF;
+  --common-surface-card: #FFFFFF;
+  --common-surface-subtle: #F8F9FC;
+  --common-background-subtle: #EEF2F9;
+  --common-surface-raised: #FFFFFF;
+  --common-text-primary: #20283D;
+  --common-text-secondary: #626D83;
+  --common-text-disabled: #8B95A8;
+  --common-border-subtle: #DEE6F3;
+  --common-border-control: #758197;
+  --common-status-success: #16765D;
+  --common-status-success-soft: #E7F7F1;
+  --common-status-warning: #8A5200;
+  --common-status-warning-soft: #FFF3DD;
+  --common-status-danger: #B34538;
+  --common-status-danger-soft: #FCEBE8;
+  --common-status-danger-fill: #B34538;
+  --common-status-on-danger-fill: #FFFFFF;
+  --common-overlay-scrim: rgba(0, 0, 0, 0.4);
+  --common-overlay-shadow: rgba(20, 35, 76, 0.122);
+}
+
+[data-common-theme='dark'] {
+  --common-brand-base: #3563E9;
+  --common-brand-on-base: #FFFFFF;
+  --common-action-primary: #A6BDFF;
+  --common-action-on-primary: #14234C;
+  --common-action-hover: #B8CBFF;
+  --common-action-pressed: #91ADF5;
+  --common-action-soft: #263552;
+  --common-action-on-soft: #C5D5FF;
+  --common-surface-canvas: #11131A;
+  --common-surface-card: #1B1E28;
+  --common-surface-subtle: #232735;
+  --common-background-subtle: #232735;
+  --common-surface-raised: #2E3446;
+  --common-text-primary: #F4F5F7;
+  --common-text-secondary: #AAB4C6;
+  --common-text-disabled: #697386;
+  --common-border-subtle: #303544;
+  --common-border-control: #7C8AA3;
+  --common-status-success: #3DD6A3;
+  --common-status-success-soft: #143A30;
+  --common-status-warning: #FFD18A;
+  --common-status-warning-soft: #3D2D17;
+  --common-status-danger: #FFAAA1;
+  --common-status-danger-soft: #462722;
+  --common-status-danger-fill: #FFAAA1;
+  --common-status-on-danger-fill: #3A1510;
+  --common-overlay-scrim: rgba(0, 0, 0, 0.6);
+  --common-overlay-shadow: rgba(0, 0, 0, 0.322);
+}

@@ -1,5 +1,7 @@
 import 'dart:ui';
 
+import 'color_values.dart';
+
 /// Shared application-level semantic colors.
 ///
 /// Domain colors such as finance categories or lottery balls intentionally do
@@ -169,81 +171,93 @@ abstract final class CommonColors {
   static const light = CommonColorTokens(
     brightness: Brightness.light,
     brand: BrandColors(
-      base: Color(0xFF3563E9),
-      onBase: Color(0xFFFFFFFF),
+      base: CommonColorValues.lightBrandBase,
+      onBase: CommonColorValues.lightBrandOnBase,
     ),
     action: ActionColors(
-      primary: Color(0xFF3563E9),
-      onPrimary: Color(0xFFFFFFFF),
-      hover: Color(0xFF2E57D4),
-      pressed: Color(0xFF264BC1),
-      soft: Color(0xFFEAF0FF),
-      onSoft: Color(0xFF264BC1),
+      primary: CommonColorValues.lightActionPrimary,
+      onPrimary: CommonColorValues.lightActionOnPrimary,
+      hover: CommonColorValues.lightActionHover,
+      pressed: CommonColorValues.lightActionPressed,
+      soft: CommonColorValues.lightActionSoft,
+      onSoft: CommonColorValues.lightActionOnSoft,
     ),
     surface: SurfaceColors(
-      canvas: Color(0xFFF5F8FF),
-      card: Color(0xFFFFFFFF),
-      subtle: Color(0xFFF8F9FC),
-      backgroundSubtle: Color(0xFFEEF2F9),
-      raised: Color(0xFFFFFFFF),
+      canvas: CommonColorValues.lightSurfaceCanvas,
+      card: CommonColorValues.lightSurfaceCard,
+      subtle: CommonColorValues.lightSurfaceSubtle,
+      backgroundSubtle: CommonColorValues.lightBackgroundSubtle,
+      raised: CommonColorValues.lightSurfaceRaised,
     ),
     text: TextColors(
-      primary: Color(0xFF20283D),
-      secondary: Color(0xFF626D83),
-      disabled: Color(0xFF8B95A8),
+      primary: CommonColorValues.lightTextPrimary,
+      secondary: CommonColorValues.lightTextSecondary,
+      disabled: CommonColorValues.lightTextDisabled,
     ),
-    border: BorderColors(subtle: Color(0xFFDEE6F3), control: Color(0xFF758197)),
+    border: BorderColors(
+      subtle: CommonColorValues.lightBorderSubtle,
+      control: CommonColorValues.lightBorderControl,
+    ),
     status: StatusColors(
-      success: Color(0xFF16765D),
-      successSoft: Color(0xFFE7F7F1),
-      warning: Color(0xFF8A5200),
-      warningSoft: Color(0xFFFFF3DD),
-      danger: Color(0xFFB34538),
-      dangerSoft: Color(0xFFFCEBE8),
-      dangerFill: Color(0xFFB34538),
-      onDangerFill: Color(0xFFFFFFFF),
+      success: CommonColorValues.lightStatusSuccess,
+      successSoft: CommonColorValues.lightStatusSuccessSoft,
+      warning: CommonColorValues.lightStatusWarning,
+      warningSoft: CommonColorValues.lightStatusWarningSoft,
+      danger: CommonColorValues.lightStatusDanger,
+      dangerSoft: CommonColorValues.lightStatusDangerSoft,
+      dangerFill: CommonColorValues.lightStatusDangerFill,
+      onDangerFill: CommonColorValues.lightStatusOnDangerFill,
     ),
-    overlay: OverlayColors(scrim: Color(0x66000000), shadow: Color(0x1F14234C)),
+    overlay: OverlayColors(
+      scrim: CommonColorValues.lightOverlayScrim,
+      shadow: CommonColorValues.lightOverlayShadow,
+    ),
   );
 
   static const dark = CommonColorTokens(
     brightness: Brightness.dark,
     brand: BrandColors(
-      base: Color(0xFF3563E9),
-      onBase: Color(0xFFFFFFFF),
+      base: CommonColorValues.darkBrandBase,
+      onBase: CommonColorValues.darkBrandOnBase,
     ),
     action: ActionColors(
-      primary: Color(0xFFA6BDFF),
-      onPrimary: Color(0xFF14234C),
-      hover: Color(0xFFB8CBFF),
-      pressed: Color(0xFF91ADF5),
-      soft: Color(0xFF263552),
-      onSoft: Color(0xFFC5D5FF),
+      primary: CommonColorValues.darkActionPrimary,
+      onPrimary: CommonColorValues.darkActionOnPrimary,
+      hover: CommonColorValues.darkActionHover,
+      pressed: CommonColorValues.darkActionPressed,
+      soft: CommonColorValues.darkActionSoft,
+      onSoft: CommonColorValues.darkActionOnSoft,
     ),
     surface: SurfaceColors(
-      canvas: Color(0xFF11131A),
-      card: Color(0xFF1B1E28),
-      subtle: Color(0xFF232735),
-      backgroundSubtle: Color(0xFF232735),
-      raised: Color(0xFF2E3446),
+      canvas: CommonColorValues.darkSurfaceCanvas,
+      card: CommonColorValues.darkSurfaceCard,
+      subtle: CommonColorValues.darkSurfaceSubtle,
+      backgroundSubtle: CommonColorValues.darkBackgroundSubtle,
+      raised: CommonColorValues.darkSurfaceRaised,
     ),
     text: TextColors(
-      primary: Color(0xFFF4F5F7),
-      secondary: Color(0xFFAAB4C6),
-      disabled: Color(0xFF697386),
+      primary: CommonColorValues.darkTextPrimary,
+      secondary: CommonColorValues.darkTextSecondary,
+      disabled: CommonColorValues.darkTextDisabled,
     ),
-    border: BorderColors(subtle: Color(0xFF303544), control: Color(0xFF7C8AA3)),
+    border: BorderColors(
+      subtle: CommonColorValues.darkBorderSubtle,
+      control: CommonColorValues.darkBorderControl,
+    ),
     status: StatusColors(
-      success: Color(0xFF3DD6A3),
-      successSoft: Color(0xFF143A30),
-      warning: Color(0xFFFFD18A),
-      warningSoft: Color(0xFF3D2D17),
-      danger: Color(0xFFFFAAA1),
-      dangerSoft: Color(0xFF462722),
-      dangerFill: Color(0xFFFFAAA1),
-      onDangerFill: Color(0xFF3A1510),
+      success: CommonColorValues.darkStatusSuccess,
+      successSoft: CommonColorValues.darkStatusSuccessSoft,
+      warning: CommonColorValues.darkStatusWarning,
+      warningSoft: CommonColorValues.darkStatusWarningSoft,
+      danger: CommonColorValues.darkStatusDanger,
+      dangerSoft: CommonColorValues.darkStatusDangerSoft,
+      dangerFill: CommonColorValues.darkStatusDangerFill,
+      onDangerFill: CommonColorValues.darkStatusOnDangerFill,
     ),
-    overlay: OverlayColors(scrim: Color(0x99000000), shadow: Color(0x52000000)),
+    overlay: OverlayColors(
+      scrim: CommonColorValues.darkOverlayScrim,
+      shadow: CommonColorValues.darkOverlayShadow,
+    ),
   );
 
   static CommonColorTokens resolve(Brightness brightness) =>

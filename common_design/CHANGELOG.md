@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Add compile-time scalar color constants for `const` consumers.
+- Add the official Web CSS semantic color contract.
+
 ## 0.1.0
 
 - Add shared light and dark semantic color tokens.

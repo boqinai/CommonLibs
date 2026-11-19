@@ -1,6 +1,6 @@
 name: common_design
 description: Shared semantic color tokens and accessibility helpers for Boqinai Flutter apps.
-version: 0.1.0
+version: 0.2.0
 publish_to: none
 
 environment:

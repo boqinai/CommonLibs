@@ -2,6 +2,8 @@
 
 Boqinai Flutter 应用共用的语义色套件。包内提供经过对比度评审的浅色、深色色板，以及 WCAG 对比度检查工具。
 
+需要 `const` 表达式时使用 `CommonColorValues`；Web 项目使用 `web/common-colors.css`。
+
 ```dart
 final colors = CommonColors.resolve(brightness);
 final primary = colors.action.primary;

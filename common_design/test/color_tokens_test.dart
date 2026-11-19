@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:common_design/common_design.dart';
@@ -9,6 +10,34 @@ void main() {
     expect(CommonColors.resolve(Brightness.dark), same(CommonColors.dark));
     expect(CommonColors.light.action.primary, const Color(0xFF3563E9));
     expect(CommonColors.dark.action.primary, const Color(0xFFA6BDFF));
+  });
+
+  test('compile-time values match grouped palettes', () {
+    expect(
+      CommonColorValues.lightActionPrimary,
+      CommonColors.light.action.primary,
+    );
+    expect(
+      CommonColorValues.lightSurfaceCanvas,
+      CommonColors.light.surface.canvas,
+    );
+    expect(
+      CommonColorValues.darkActionPrimary,
+      CommonColors.dark.action.primary,
+    );
+    expect(
+      CommonColorValues.darkTextPrimary,
+      CommonColors.dark.text.primary,
+    );
+  });
+
+  test('web contract exposes reviewed light and dark roles', () {
+    final css = File('web/common-colors.css').readAsStringSync();
+    expect(css, contains('--common-action-primary: #3563E9;'));
+    expect(css, contains('--common-surface-canvas: #F5F8FF;'));
+    expect(css, contains("[data-common-theme='dark']"));
+    expect(css, contains('--common-action-primary: #A6BDFF;'));
+    expect(css, contains('--common-surface-canvas: #11131A;'));
   });
 
   test(
