@@ -4,6 +4,7 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 
 | 模块 | 用途 |
 | --- | --- |
+| `common_design` | Flutter 应用共用语义色、明暗色板和对比度校验 |
 | `app_update` | Flutter Android 更新检查、前台服务下载和安装 |
 | `carrier_auth` | Flutter 独立运营商号码认证插件，Android/iOS |
 | `fusion_auth` | Flutter 阿里云融合认证（本机号码一键登录）插件，Android/iOS |
@@ -17,6 +18,7 @@ Boqinai 应用共用基础库，避免在每个项目重复实现更新、认证
 
 | 模块 | Tag 格式 | 示例 |
 | --- | --- | --- |
+| `common_design` | 连字符 | `common_design-v0.1.0` |
 | `auth_server` | 斜杠 | `auth_server/v0.16.0` |
 | `auth_client` | 连字符 | `auth_client-v0.16.1` |
 | `carrier_auth` | 连字符 | `carrier_auth-v0.1.1` |
@@ -40,6 +42,7 @@ git lfs pull
 ## 验证
 
 ```bash
+(cd common_design && flutter analyze --fatal-infos && flutter test)
 (cd app_update && flutter analyze --fatal-infos && flutter test)
 (cd auth_client && flutter analyze --fatal-infos && flutter test)
 (cd fusion_auth && flutter analyze --fatal-infos && flutter test)
